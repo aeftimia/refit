@@ -3,10 +3,10 @@
 This project aligns a video clock with an original Garmin FIT activity and
 writes an Insta360-compatible FIT file. The writer patches fixed-width FIT
 timestamp and speed fields in the original binary and recalculates its CRCs;
-all Garmin messages, developer fields, GPS metadata, heart rate, elevation,
-events, and device information are retained byte-for-byte. Full mode replaces
-speed during the video overlap with an optical-motion estimate. Dry-run mode
-keeps Garmin's speed for comparison.
+every non-target byte is retained, including Garmin messages, developer fields,
+GPS metadata, heart rate, elevation, events, and device information. Full mode
+replaces speed during the video overlap with an optical-motion estimate.
+Dry-run mode keeps Garmin's speed for comparison.
 
 ```bash
 bash insta360_video_speed_fit.sh [--dry-run] VIDEO.mp4 GARMIN.fit OUTPUT.fit
