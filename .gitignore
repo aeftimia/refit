@@ -8,6 +8,7 @@ venv/
 *.gpx
 *.mp4
 *.insv
+validation-output/
 
 # Temporary files
 *.tmp

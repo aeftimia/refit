@@ -500,11 +500,13 @@ def main():
     if times != sorted(times):
         raise ValueError("GPX track point times must be ordered")
 
-    analysis_fps = min(args.sample_fps, 1.0) if args.dry_run else args.sample_fps
-    motion_t, motion_v = optical_motion(
-        args.video, analysis_fps, args.flow_workers,
-        parallel_decode=args.dry_run,
-    )
+    motion_t = motion_v = None
+    if not (args.dry_run and args.sync_range == 0):
+        analysis_fps = min(args.sample_fps, 1.0) if args.dry_run else args.sample_fps
+        motion_t, motion_v = optical_motion(
+            args.video, analysis_fps, args.flow_workers,
+            parallel_decode=args.dry_run,
+        )
     if args.sync_range:
         gps_t, gps_v, raw_gps_v, speed_source = speed_series(track_points, times)
         offset, sync_score, zero_score, sync_samples, at_limit = find_clock_offset(
