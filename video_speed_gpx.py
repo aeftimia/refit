@@ -27,6 +27,8 @@ try:
 except ImportError as exc:
     raise SystemExit("Install dependencies with: python3 -m pip install opencv-python numpy") from exc
 
+from optical_flow_pipeline import blur_frame, median_flow_magnitude
+
 GPXTPX = "http://www.garmin.com/xmlschemas/TrackPointExtension/v1"
 ET.register_namespace("gpxtpx", GPXTPX)
 
@@ -136,11 +138,7 @@ def intersect_window(video_start, video_end, gpx_start, gpx_end):
 
 
 def flow_magnitude(previous, gray) -> float:
-    flow = cv2.calcOpticalFlowFarneback(previous, gray, None, .5, 3, 15, 3, 5, 1.2, 0)
-    mag = np.linalg.norm(flow, axis=2)
-    h, w = mag.shape
-    roi = mag[int(.2*h):int(.85*h), int(.1*w):int(.9*w)]
-    return float(np.median(roi))
+    return median_flow_magnitude(previous, gray)
 
 
 def optical_motion(
@@ -235,8 +233,8 @@ def optical_motion(
 
         with ThreadPoolExecutor(max_workers=flow_workers) as executor:
             for sample_time, frames in zip(sample_times, decoded):
-                previous = cv2.GaussianBlur(frames[0], (5, 5), 0)
-                gray = cv2.GaussianBlur(frames[1], (5, 5), 0)
+                previous = blur_frame(frames[0])
+                gray = blur_frame(frames[1])
                 t = float(sample_time) + 1 / fps
                 pending.append((t, executor.submit(flow_magnitude, previous, gray)))
                 if len(pending) >= flow_workers * 2:
@@ -274,8 +272,8 @@ def optical_motion(
                     gray = read_frame()
                     if previous is None or gray is None:
                         break
-                    previous = cv2.GaussianBlur(previous, (5, 5), 0)
-                    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+                    previous = blur_frame(previous)
+                    gray = blur_frame(gray)
                     t = frame_no / sample_fps + 1 / fps
                     pending.append((t, executor.submit(flow_magnitude, previous, gray)))
                     frame_no += 1
