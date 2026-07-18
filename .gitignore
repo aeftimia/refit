@@ -9,6 +9,7 @@ venv/
 *.mp4
 *.insv
 validation-output/
+validation-data/
 
 # Temporary files
 *.tmp

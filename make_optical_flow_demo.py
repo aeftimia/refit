@@ -2,6 +2,7 @@
 """Render short videos illustrating the optical-flow preprocessing pipeline."""
 
 import argparse
+import json
 from pathlib import Path
 import subprocess
 
@@ -12,6 +13,8 @@ from optical_flow_pipeline import (
     BLUR_KERNEL, calculate_flow, flow_magnitudes, preprocess_frame,
     roi_bounds,
 )
+from fit_binary import FitBinary
+from video_speed_fit import parse_tz, video_window
 
 
 def writer(path, fps, size, color=True):
@@ -46,6 +49,50 @@ def default_demo_output_dir(start, duration):
     duration_slug = f"{duration:g}".replace(".", "p")
     range_slug = f"{timestamp_slug(start)}-{timestamp_slug(start + duration)}"
     return Path.home() / "Movies" / f"optical-flow-demo-{duration_slug}s-{range_slug}"
+
+
+def highest_fit_discrepancy(video, dry_fit, full_fit, duration):
+    """Locate the video interval with highest mean absolute FIT speed difference."""
+    def series(path):
+        fit = FitBinary(path)
+        dense = fit.gps_metadata_points()
+        if dense:
+            return (
+                np.array([timestamp for _, timestamp, _ in dense], dtype=float),
+                np.array([speed for _, _, speed in dense], dtype=float),
+            )
+        records = [
+            point for point in fit.track_records() if point.enhanced_speed is not None
+        ]
+        return (
+            np.array([point.timestamp / 1000 for point in records], dtype=float),
+            np.array([point.enhanced_speed for point in records], dtype=float),
+        )
+
+    metadata = json.loads(subprocess.check_output([
+        "exiftool", "-j", "-n", "-api", "QuickTimeUTC=1", "-Duration",
+        "-CreateDate", "-MediaCreateDate", "-TrackCreateDate", "-DateTimeOriginal",
+        "-TimeZone", "-OffsetTimeOriginal", str(video),
+    ]))[0]
+    video_start, _ = video_window(metadata, parse_tz("UTC"))
+    dry_t, dry_v = series(dry_fit)
+    full_t, full_v = series(full_fit)
+    first = max(dry_t[0], full_t[0], video_start.timestamp())
+    last = min(dry_t[-1], full_t[-1])
+    step = .25
+    grid = np.arange(first, last + step / 2, step)
+    difference = np.abs(np.interp(grid, dry_t, dry_v) - np.interp(grid, full_t, full_v))
+    samples = max(1, round(duration / step))
+    if len(difference) < samples:
+        raise ValueError("FIT/video overlap is shorter than the requested discrepancy window")
+    rolling = np.convolve(difference, np.ones(samples) / samples, mode="valid")
+    index = int(np.argmax(rolling))
+    start = float(grid[index] - video_start.timestamp())
+    print(
+        f"Highest {duration:g}s mean speed discrepancy starts at video {start:.3f}s "
+        f"(mean {rolling[index]:.3f} m/s)"
+    )
+    return start
 
 
 def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.0, baseline=None):
@@ -285,11 +332,23 @@ def main():
         "output_dir", nargs="?",
         help="default: ~/Movies/optical-flow-demo-{duration}s-{start}-{end}",
     )
-    parser.add_argument("--start", type=float, default=375.0)
+    parser.add_argument("--start", type=float)
     parser.add_argument("--duration", type=float, default=10.0)
     parser.add_argument("--sample-fps", type=float, default=4.0)
     parser.add_argument("--baseline", type=float)
+    parser.add_argument(
+        "--compare-fit", nargs=2, metavar=("DRY.fit", "FULL.fit"),
+        help="automatically use the interval with highest mean speed discrepancy",
+    )
     args = parser.parse_args()
+    if args.compare_fit:
+        if args.start is not None:
+            parser.error("--start and --compare-fit are mutually exclusive")
+        args.start = highest_fit_discrepancy(
+            args.video, args.compare_fit[0], args.compare_fit[1], args.duration
+        )
+    elif args.start is None:
+        args.start = 375.0
     generate_optical_flow_demo(
         args.video, args.output_dir, args.start, args.duration, args.sample_fps, args.baseline
     )

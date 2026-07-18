@@ -1,9 +1,19 @@
-# GPX correction for Insta360 telemetry
+# FIT speed correction for Insta360 telemetry
 
-This project aligns a video clock with a Strava GPX activity and writes an
-Insta360-compatible FIT file. Full mode replaces the Strava-derived speed shape
-with an optical-motion estimate while preserving Strava's distance and average
-speed. Dry-run mode keeps the Strava-derived speed for comparison.
+This project aligns a video clock with an original Garmin FIT activity and
+writes an Insta360-compatible FIT file. The writer patches fixed-width FIT
+timestamp and speed fields in the original binary and recalculates its CRCs;
+all Garmin messages, developer fields, GPS metadata, heart rate, elevation,
+events, and device information are retained byte-for-byte. Full mode replaces
+speed during the video overlap with an optical-motion estimate. Dry-run mode
+keeps Garmin's speed for comparison.
+
+```bash
+bash insta360_video_speed_fit.sh [--dry-run] VIDEO.mp4 GARMIN.fit OUTPUT.fit
+```
+
+The historical `insta360_video_speed_gpx.sh` name remains as a compatibility
+wrapper, but it now expects FIT input too.
 
 ## Optical speed pipeline
 
@@ -18,9 +28,9 @@ speed. Dry-run mode keeps the Strava-derived speed for comparison.
 4. Convert each per-pixel flow vector to magnitude.
 5. Retain the central spatial ROI and reduce it to its median magnitude.
 6. Temporally smooth the resulting scalar motion series.
-7. Align raw optical motion with Strava-derived speed using a static clock-shift
-   search and Spearman rank correlation.
-8. Identify contiguous, nonzero-duration intervals where the aligned GPX reports
+7. Align raw optical motion with Garmin's approximately 1 Hz `gps_metadata`
+   speed stream using a static clock-shift search and Spearman rank correlation.
+8. Identify contiguous, nonzero-duration intervals where the aligned FIT reports
    exactly zero speed.
 9. Calculate the median optical magnitude within each observed stop. Use the
    lowest interval median as the additive optical baseline. This selects the
@@ -28,12 +38,12 @@ speed. Dry-run mode keeps the Strava-derived speed for comparison.
 10. If no stationary interval exists, use a baseline of exactly zero. The code
     does not assume the camera is stationary for any fixed fraction of a ride.
 11. Subtract the baseline and clamp negative results to zero.
-12. Scale the corrected optical series so its time integral equals the Strava
-    distance over the video/GPX overlap.
-13. Store the result as FIT `enhanced_speed`, alongside aligned coordinates,
-    elevation, distance, and heart rate.
+12. Scale the corrected optical series so its time integral equals the Garmin
+    coordinate distance over the video/FIT overlap.
+13. Patch both record `enhanced_speed` and the denser Garmin GPS-metadata speed
+    values while preserving every other original FIT field.
 
-The baseline method assumes that the GPX zero-speed intervals are genuine stops.
+The baseline method assumes that the Garmin zero-speed intervals are genuine stops.
 Camera rotation during a stop can raise its median motion, which is why the
 quietest stop is used. Without an observed stop, the additive baseline is not
 identifiable and no subtraction is performed.
@@ -47,6 +57,14 @@ share the exact preprocessing, Farneback, magnitude, ROI, and median operations.
 ```bash
 python make_optical_flow_demo.py VIDEO.mp4 [OUTPUT_DIR] \
   --start 375 --duration 10 --sample-fps 4 --baseline 0.12
+```
+
+To locate and render the interval where two FIT outputs disagree most on
+average, omit `--start` and provide both files:
+
+```bash
+python make_optical_flow_demo.py VIDEO.mp4 --duration 30 \
+  --compare-fit OUTPUT-DRY.fit OUTPUT-FULL.fit
 ```
 
 When `OUTPUT_DIR` is omitted, the CLI automatically creates a deterministic
@@ -77,3 +95,19 @@ their corresponding timeline slices. For six stages across a six-second demo,
 stage 1 supplies the first second, stage 2 the second, and so on; the video does
 not restart when the displayed processing stage changes. The unprocessed source
 preview remains separate from this stage-only splice.
+
+## Public validation datasets
+
+The repository includes end-to-end, modality-selective validators for two
+public off-road datasets:
+
+```bash
+python tartandrive_validation.py
+python sfu_mountain_validation.py --download
+```
+
+The TartanDrive runner downloads the selected camera, fused odometry, and four
+wheel encoders, then reports estimator errors plus per-wheel disagreement.
+The SFU runner selects forward camera, low-grade Garmin GPS, and wheel velocity
+without requiring ROS. See `TARTANDRIVE_VALIDATION.md` and
+`SFU_MOUNTAIN_VALIDATION.md` for dataset-specific limitations and commands.
