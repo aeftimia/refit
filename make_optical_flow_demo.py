@@ -113,13 +113,27 @@ def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.
     source_fps = cap.get(cv2.CAP_PROP_FPS)
     start_frame = round(start * source_fps)
     end_frame = round((start + duration) * source_fps)
-    sample_step = max(2, round(source_fps / sample_fps))
+    if sample_fps <= 0 or sample_fps > source_fps / 2:
+        raise ValueError(
+            f"sample_fps must be in (0, {source_fps / 2:g}] so pairs do not overlap"
+        )
+    target_frames = np.rint(
+        np.arange(start, start + duration, 1.0 / sample_fps) * source_fps
+    ).astype(int)
+    target_frames = np.unique(target_frames)
+    target_frames = target_frames[target_frames + 1 < end_frame]
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
     observations = []
     frame_number = start_frame
-    while frame_number + 1 < end_frame:
-        first_frame_number = frame_number
+    for target_frame in target_frames:
+        while frame_number < target_frame:
+            if not cap.grab():
+                break
+            frame_number += 1
+        if frame_number != target_frame:
+            break
+        first_frame_number = target_frame
         ok, first = cap.read()
         if not ok:
             break
@@ -136,13 +150,6 @@ def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.
             first_gray, gray, first_blurred, blurred, flow, magnitude,
             first_frame_number,
         ))
-
-        # Advance to the next uniformly sampled adjacent-frame pair.
-        skip = sample_step - 2
-        for _ in range(skip):
-            if not cap.grab():
-                break
-            frame_number += 1
     cap.release()
     if not observations:
         raise RuntimeError("No observations decoded")
