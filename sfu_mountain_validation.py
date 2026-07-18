@@ -23,6 +23,10 @@ import cv2
 import numpy as np
 
 from optical_flow_pipeline import blur_frame, median_flow_magnitude, resize_frame, grayscale_frame
+from speed_estimation import (
+    arithmetic_mean_scale, error_summary, find_rank_offset, haversine_distances,
+    stationary_interval_baseline,
+)
 
 
 TORRENT_HASH = "e3d6b8d9e87cab68c7947e800e337e58fc8d8e59"
@@ -156,17 +160,9 @@ def load_wheel(path):
     return values[np.argsort(values[:, 0])]
 
 
-def haversine_series(latitude, longitude):
-    lat = np.radians(latitude)
-    lon = np.radians(longitude)
-    dlat, dlon = np.diff(lat), np.diff(lon)
-    a = np.sin(dlat / 2) ** 2 + np.cos(lat[:-1]) * np.cos(lat[1:]) * np.sin(dlon / 2) ** 2
-    return 6371008.8 * 2 * np.arcsin(np.sqrt(a))
-
-
 def gps_speed(gps):
     dt = np.diff(gps[:, 0])
-    distance = haversine_series(gps[:, 1], gps[:, 2])
+    distance = haversine_distances(gps[:, 1], gps[:, 2])
     valid = dt > 0
     times = (gps[:-1, 0] + gps[1:, 0]) / 2
     return times[valid], distance[valid] / dt[valid]
@@ -224,68 +220,24 @@ def optical_series(archive_path, members, start, end):
     times, values = np.asarray(times), np.asarray(values)
     if len(values) < 2:
         raise ValueError("selected SFU interval has too few images")
-    median_dt = float(np.median(np.diff(times)))
-    kernel = max(3, round(2.0 / median_dt) | 1)
-    return times, np.convolve(values, np.ones(kernel) / kernel, mode="same")
-
-
-def rank_correlation(a, b):
-    if np.std(a) < 1e-12 or np.std(b) < 1e-12:
-        return -1.0
-    ar = np.argsort(np.argsort(a, kind="mergesort"), kind="mergesort")
-    br = np.argsort(np.argsort(b, kind="mergesort"), kind="mergesort")
-    return float(np.corrcoef(ar, br)[0, 1])
+    return times, values
 
 
 def clock_offset(opt_t, optical, gps_t, gps_v, search_range):
     relative = opt_t - opt_t[0]
     grid = np.arange(math.ceil(relative[0]), math.floor(relative[-1]) + 1)
     motion = np.interp(grid, relative, optical)
-    # Offset means GPS time sampled for a given camera time, matching the main pipeline.
-    candidates = np.arange(-search_range, search_range + 0.001, 0.25)
-    scores = []
-    for offset in candidates:
-        query = opt_t[0] + grid + offset
-        valid = (query >= gps_t[0]) & (query <= gps_t[-1])
-        scores.append(rank_correlation(motion[valid], np.interp(query[valid], gps_t, gps_v)) if valid.sum() >= 20 else -2)
-    coarse = float(candidates[int(np.argmax(scores))])
-    fine = np.arange(coarse - 0.25, coarse + 0.2501, 0.025)
-    fine_scores = []
-    for offset in fine:
-        query = opt_t[0] + grid + offset
-        valid = (query >= gps_t[0]) & (query <= gps_t[-1])
-        fine_scores.append(rank_correlation(motion[valid], np.interp(query[valid], gps_t, gps_v)) if valid.sum() >= 20 else -2)
-    return float(fine[int(np.argmax(fine_scores))]), float(max(fine_scores))
-
-
-def summary(estimate, truth):
-    error = estimate - truth
-    absolute = np.abs(error)
-    return {
-        "mae_mps": float(np.mean(absolute)),
-        "rmse_mps": float(np.sqrt(np.mean(error ** 2))),
-        "p95_absolute_error_mps": float(np.percentile(absolute, 95)),
-        "max_absolute_error_mps": float(np.max(absolute)),
-        "bias_mps": float(np.mean(error)),
-        "pearson_correlation": float(np.corrcoef(estimate, truth)[0, 1]),
-        "spearman_rank_correlation": rank_correlation(estimate, truth),
-    }
-
-
-def stationary_baseline(times, optical, dry_speed):
-    """Match production: quietest median of real, nonzero-duration GPS stops."""
-    stopped = np.isclose(dry_speed, 0.0, atol=1e-9)
-    medians = []
-    start = None
-    for index, is_stopped in enumerate(stopped):
-        if is_stopped and start is None:
-            start = index
-        if start is not None and (not is_stopped or index == len(stopped) - 1):
-            end = index if is_stopped else index - 1
-            if end > start and times[end] > times[start]:
-                medians.append(float(np.median(optical[start:end + 1])))
-            start = None
-    return min(medians) if medians else 0.0, len(medians)
+    offset, score, _, _, _ = find_rank_offset(
+        opt_t[0] + grid,
+        motion,
+        gps_t,
+        gps_v,
+        search_range,
+        coarse_step=0.25,
+        refinement_step=0.025,
+        minimum_samples=20,
+    )
+    return offset, score
 
 
 def evaluate(data_root, output_dir, camera_rate, duration, sync_range):
@@ -308,16 +260,17 @@ def evaluate(data_root, output_dir, camera_rate, duration, sync_range):
     # Coordinate-derived GPS usually jitters even at rest. Do not invent a
     # stationary fraction or threshold: absent an actual zero-speed interval,
     # the production fallback is exactly zero.
-    baseline, stop_runs = stationary_baseline(grid, optical_grid, dry)
+    baseline, stop_runs, _ = stationary_interval_baseline(
+        grid, optical_grid, dry, stationary_tolerance=1e-9,
+    )
     optical_grid = np.maximum(optical_grid - baseline, 0.0)
-    gps_distance = float(np.trapezoid(dry, grid))
-    optical_integral = float(np.trapezoid(optical_grid, grid))
-    full = optical_grid * gps_distance / optical_integral if optical_integral > 1e-12 else np.full_like(grid, gps_distance / (grid[-1] - grid[0]))
+    full, _ = arithmetic_mean_scale(optical_grid, np.mean(dry))
 
     metrics = {
         "dataset": "SFU Mountain dry-b",
         "camera_rate_hz": camera_rate,
         "camera_frames": len(opt_t) + 1,
+        "temporal_smoothing_seconds": 0.0,
         "evaluation_start_unix": float(grid[0]),
         "evaluation_end_unix": float(grid[-1]),
         "clock_offset_seconds": offset,
@@ -325,8 +278,8 @@ def evaluate(data_root, output_dir, camera_rate, duration, sync_range):
         "optical_baseline_px_per_frame": baseline,
         "stationary_runs_used": stop_runs,
         "wheel_mean_mps": float(np.mean(truth)),
-        "dry": summary(dry, truth),
-        "full": summary(full, truth),
+        "dry": error_summary(dry, truth, include_rank=True),
+        "full": error_summary(full, truth, include_rank=True),
     }
     metrics["winner_by_mae"] = "full" if metrics["full"]["mae_mps"] < metrics["dry"]["mae_mps"] else "dry"
     output_dir.mkdir(parents=True, exist_ok=True)

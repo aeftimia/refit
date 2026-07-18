@@ -12,9 +12,6 @@ Dry-run mode keeps Garmin's speed for comparison.
 bash insta360_video_speed_fit.sh [--dry-run] VIDEO.mp4 GARMIN.fit OUTPUT.fit
 ```
 
-The historical `insta360_video_speed_gpx.sh` name remains as a compatibility
-wrapper, but it now expects FIT input too.
-
 ## Optical speed pipeline
 
 1. Uniformly sample adjacent video-frame pairs.
@@ -27,7 +24,9 @@ wrapper, but it now expects FIT input too.
    `(15, 16)`, `(30, 31)`, and so on.
 4. Convert each per-pixel flow vector to magnitude.
 5. Retain the central spatial ROI and reduce it to its median magnitude.
-6. Temporally smooth the resulting scalar motion series.
+6. Preserve the resulting scalar motion series without temporal smoothing.
+   Spatial median reduction already rejects pixel outliers, while an assumed
+   temporal cutoff could erase genuine acceleration and braking.
 7. Align raw optical motion with Garmin's approximately 1 Hz `gps_metadata`
    speed stream using a static clock-shift search and Spearman rank correlation.
 8. Identify contiguous, nonzero-duration intervals where the aligned FIT reports
@@ -47,6 +46,10 @@ The baseline method assumes that the Garmin zero-speed intervals are genuine sto
 Camera rotation during a stop can raise its median motion, which is why the
 quietest stop is used. Without an observed stop, the additive baseline is not
 identifiable and no subtraction is performed.
+
+Scalar ranking, clock-offset search, stop-baseline estimation, mean scaling,
+and validation metrics live in `speed_estimation.py` and are shared by the
+production and public-validation pipelines.
 
 ## Demonstrations
 

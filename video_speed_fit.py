@@ -25,6 +25,10 @@ except ImportError as exc:
     raise SystemExit("Install dependencies with: python3 -m pip install opencv-python numpy") from exc
 
 from optical_flow_pipeline import blur_frame, median_flow_magnitude
+from speed_estimation import (
+    find_rank_offset, haversine_distance, stationary_interval_baseline,
+    time_mean_scale,
+)
 
 from fit_binary import FitBinary
 
@@ -59,14 +63,6 @@ def video_window(metadata: dict, default_tz) -> tuple[datetime, datetime]:
     if not math.isfinite(duration) or duration <= 0:
         raise ValueError("No positive MP4 duration in metadata")
     return start, start + timedelta(seconds=duration)
-
-
-def haversine(a, b) -> float:
-    lat1, lon1 = map(math.radians, a)
-    lat2, lon2 = map(math.radians, b)
-    dlat, dlon = lat2 - lat1, lon2 - lon1
-    h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
-    return 6371008.8 * 2 * math.asin(math.sqrt(h))
 
 
 def intersect_window(video_start, video_end, fit_start, fit_end):
@@ -239,62 +235,10 @@ def optical_motion(
     if len(samples) < 2:
         raise ValueError("Video is too short to estimate motion")
     vals = np.array([x[1] for x in samples], dtype=float)
-    kernel = max(3, int(round(sample_fps * 2)) | 1)
-    vals = np.convolve(vals, np.ones(kernel) / kernel, mode="same")
-    # Do not assume any fixed fraction of the recording represents zero motion.
-    # Until a supported baseline estimate exists, the conservative floor is zero.
+    # Preserve the measured temporal structure. With many spatially robust
+    # samples, a guessed temporal cutoff can attenuate real acceleration and
+    # braking more than it reduces estimator noise.
     return np.array([x[0] for x in samples]), vals
-
-
-def estimate_stationary_baseline(video_start, motion_t, motion_v, gps_t, raw_gps_v):
-    """Use the quietest median among observed, nonzero-duration GPS stops."""
-    stationary = np.isclose(raw_gps_v, 0.0, atol=1e-9)
-    intervals = []
-    start = None
-    for i, stopped in enumerate(stationary):
-        if stopped and start is None:
-            start = i
-        if start is not None and (not stopped or i == len(stationary) - 1):
-            end = i if stopped and i == len(stationary) - 1 else i - 1
-            # At least two 1 Hz timestamps establish a nonzero-duration interval.
-            if end > start:
-                intervals.append((gps_t[start], gps_t[end]))
-            start = None
-
-    absolute_motion_t = video_start.timestamp() + motion_t
-    medians = []
-    supporting_samples = 0
-    for start_time, end_time in intervals:
-        selected = (absolute_motion_t >= start_time) & (absolute_motion_t <= end_time)
-        if selected.any():
-            values = motion_v[selected]
-            medians.append(float(np.median(values)))
-            supporting_samples += int(selected.sum())
-    if not medians:
-        return 0.0, 0, 0
-    return min(medians), len(medians), supporting_samples
-
-
-def rank_values(values):
-    """Ranks with averaged ties, sufficient for a dependency-free Spearman score."""
-    order = np.argsort(values, kind="mergesort")
-    sorted_values = values[order]
-    ranks = np.empty(len(values), dtype=float)
-    i = 0
-    while i < len(values):
-        j = i + 1
-        while j < len(values) and sorted_values[j] == sorted_values[i]:
-            j += 1
-        ranks[order[i:j]] = (i + j - 1) / 2
-        i = j
-    return ranks
-
-
-def correlation(a, b):
-    a, b = rank_values(a), rank_values(b)
-    if np.std(a) <= 1e-12 or np.std(b) <= 1e-12:
-        return -1.0
-    return float(np.corrcoef(a, b)[0, 1])
 
 
 def find_clock_offset(video_start, motion_t, motion_v, gps_t, gps_v, search_range):
@@ -304,25 +248,15 @@ def find_clock_offset(video_start, motion_t, motion_v, gps_t, gps_v, search_rang
     seconds = np.arange(math.ceil(motion_t[0]), math.floor(motion_t[-1]) + 1, dtype=float)
     motion = np.interp(seconds, motion_t, motion_v)
     minimum = max(20, min(60, len(seconds) // 2))
-
-    def score(offset):
-        query = video_start.timestamp() + seconds + offset
-        valid = (query >= gps_t[0]) & (query <= gps_t[-1])
-        if valid.sum() < minimum:
-            return -2.0, int(valid.sum())
-        value = correlation(motion[valid], np.interp(query[valid], gps_t, gps_v))
-        # Very lightly prefer candidates supported by more of the video.
-        value -= 0.02 * (1 - valid.mean())
-        return value, int(valid.sum())
-
-    coarse = np.arange(-search_range, search_range + 0.25, 0.5)
-    coarse_scores = [score(x)[0] for x in coarse]
-    best_coarse = float(coarse[int(np.argmax(coarse_scores))])
-    fine = np.arange(best_coarse - 0.5, best_coarse + 0.501, 0.05)
-    candidates = [(score(float(x))[0], float(x), score(float(x))[1]) for x in fine]
-    best_score, best_offset, count = max(candidates)
-    zero_score, _ = score(0.0)
-    return best_offset, best_score, zero_score, count, abs(best_coarse) >= search_range - 0.25
+    return find_rank_offset(
+        video_start.timestamp() + seconds,
+        motion,
+        gps_t,
+        gps_v,
+        search_range,
+        minimum_samples=minimum,
+        support_penalty=0.02,
+    )
 
 
 def fit_track(fit_file):
@@ -344,10 +278,10 @@ def fit_speed_series(fit_file, records, times):
         dense_v = np.array([speed for _, _, speed in dense], dtype=float)
         uniform_t = np.arange(math.ceil(dense_t[0]), math.floor(dense_t[-1]) + 1, dtype=float)
         raw_uniform_v = np.interp(uniform_t, dense_t, dense_v)
-        uniform_v = raw_uniform_v.copy()
-        if len(uniform_v) >= 7:
-            uniform_v = np.convolve(uniform_v, np.ones(7) / 7, mode="same")
-        return uniform_t, uniform_v, raw_uniform_v, "Garmin FIT ~1 Hz gps_metadata speed"
+        return (
+            uniform_t, raw_uniform_v.copy(), raw_uniform_v,
+            "Garmin FIT ~1 Hz gps_metadata speed",
+        )
 
     epoch = np.array([value.timestamp() for value in times], dtype=float)
     reported = np.array([
@@ -361,17 +295,16 @@ def fit_speed_series(fit_file, records, times):
     else:
         coordinates = [(message.position_lat, message.position_long) for message in records]
         dt = np.diff(epoch)
-        distances = np.array([haversine(a, b) for a, b in zip(coordinates, coordinates[1:])])
+        distances = np.array([
+            haversine_distance(a, b) for a, b in zip(coordinates, coordinates[1:])
+        ])
         valid_intervals = dt > 0
         epoch = ((epoch[:-1] + epoch[1:]) / 2)[valid_intervals]
         values = distances[valid_intervals] / dt[valid_intervals]
         source = "FIT coordinate-derived speed"
     uniform_t = np.arange(math.ceil(epoch[0]), math.floor(epoch[-1]) + 1, dtype=float)
     raw_uniform_v = np.interp(uniform_t, epoch, values)
-    uniform_v = raw_uniform_v.copy()
-    if len(uniform_v) >= 7:
-        uniform_v = np.convolve(uniform_v, np.ones(7) / 7, mode="same")
-    return uniform_t, uniform_v, raw_uniform_v, source
+    return uniform_t, raw_uniform_v.copy(), raw_uniform_v, source
 
 
 def main():
@@ -402,6 +335,7 @@ def main():
         p.error("--sync-range cannot be negative")
 
     metadata = json.loads(args.metadata_json)[0]
+    print("Temporal smoothing: disabled")
     video_start, video_end = video_window(metadata, parse_tz(args.default_timezone))
     clock_offset = 0.0
     fit_file = FitBinary(args.fit)
@@ -432,8 +366,13 @@ def main():
         if at_limit:
             print("Warning: best clock alignment is at the search limit", file=sys.stderr)
         if not args.dry_run:
-            baseline, stop_count, baseline_samples = estimate_stationary_baseline(
-                video_start, motion_t, motion_v, gps_t, raw_gps_v
+            absolute_motion_t = video_start.timestamp() + motion_t
+            baseline, stop_count, baseline_samples = stationary_interval_baseline(
+                absolute_motion_t,
+                motion_v,
+                np.interp(absolute_motion_t, gps_t, raw_gps_v),
+                stationary_tolerance=1e-9,
+                min_duration=1.0,
             )
             motion_v = np.maximum(motion_v - baseline, 0.0)
             if stop_count:
@@ -457,7 +396,7 @@ def main():
     if len(selected) < 2:
         raise ValueError("Video/FIT overlap contains too few position records")
     coords = [(point.position_lat, point.position_long) for point in selected]
-    distance = sum(haversine(a, b) for a, b in zip(coords, coords[1:]))
+    distance = sum(haversine_distance(a, b) for a, b in zip(coords, coords[1:]))
     duration = (end - start).total_seconds()
     avg_speed = distance / duration
 
@@ -468,16 +407,9 @@ def main():
         print("Dry-run mode: preserving every original FIT message, speed, and position")
     else:
         relative = np.interp(offsets, motion_t, motion_v, left=motion_v[0], right=motion_v[-1])
-        dt = np.diff(offsets)
-        interval_motion = (relative[:-1] + relative[1:]) / 2
-        weighted_mean = float(np.sum(interval_motion * dt) / np.sum(dt))
-        if weighted_mean <= 1e-12:
+        speeds, scale = time_mean_scale(offsets, relative, avg_speed)
+        if scale == 0.0:
             print("Warning: no usable optical motion; writing constant average speed", file=sys.stderr)
-            scale = 0.0
-            speeds = np.full(len(selected), avg_speed)
-        else:
-            scale = avg_speed / weighted_mean
-            speeds = relative * scale
         for point, speed in zip(selected, speeds):
             fit_file.set_record_speed(point.location, float(speed))
         for message, timestamp, _ in fit_file.gps_metadata_points():

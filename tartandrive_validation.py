@@ -22,6 +22,9 @@ import cv2
 import numpy as np
 
 from optical_flow_pipeline import blur_frame, median_flow_magnitude
+from speed_estimation import (
+    arithmetic_mean_scale, error_summary, stationary_interval_baseline,
+)
 
 
 SEQUENCE = "2023-11-14-14-24-21_gupta"
@@ -133,38 +136,7 @@ def optical_series(image_paths, image_t, sample_fps, workers):
                 )
     flow_t = np.array([value[0] for value in values])
     flow = np.array([value[1] for value in values])
-    kernel = max(3, int(round(sample_fps * 2)) | 1)
-    return flow_t, np.convolve(flow, np.ones(kernel) / kernel, mode="same")
-
-
-def stationary_baseline(flow_t, flow, odom_t, odom_speed, threshold=0.05):
-    stopped = np.interp(flow_t, odom_t, odom_speed) <= threshold
-    runs = []
-    start = None
-    for i, value in enumerate(stopped):
-        if value and start is None:
-            start = i
-        if start is not None and (not value or i == len(stopped) - 1):
-            end = i if value else i - 1
-            if flow_t[end] - flow_t[start] >= 2.0:
-                runs.append((start, end))
-            start = None
-    if not runs:
-        return 0.0, 0
-    return min(float(np.median(flow[a:b + 1])) for a, b in runs), len(runs)
-
-
-def summary(estimate, truth):
-    error = estimate - truth
-    absolute = np.abs(error)
-    return {
-        "mae_mps": float(np.mean(absolute)),
-        "rmse_mps": float(np.sqrt(np.mean(error ** 2))),
-        "bias_mps": float(np.mean(error)),
-        "p95_absolute_error_mps": float(np.percentile(absolute, 95)),
-        "max_absolute_error_mps": float(np.max(absolute)),
-        "pearson_correlation": float(np.corrcoef(estimate, truth)[0, 1]),
-    }
+    return flow_t, flow
 
 
 def evaluate(raw, images, output, sequence, sample_fps, workers, wheel_diameter_inches):
@@ -177,7 +149,13 @@ def evaluate(raw, images, output, sequence, sample_fps, workers, wheel_diameter_
     odom_t = np.loadtxt(raw / "gps_odom_timestamps.txt")
     odom = np.load(raw / "gps_odom_odometry.npy", allow_pickle=False)
     dry_native = np.linalg.norm(odom[:, 7:10], axis=1)
-    baseline, stop_runs = stationary_baseline(flow_t, flow, odom_t, dry_native)
+    baseline, stop_runs, _ = stationary_interval_baseline(
+        flow_t,
+        flow,
+        np.interp(flow_t, odom_t, dry_native),
+        stationary_tolerance=0.05,
+        min_duration=2.0,
+    )
     flow = np.maximum(flow - baseline, 0.0)
 
     wheel_t = np.loadtxt(raw / "wheel_rpm_timestamps.txt")
@@ -187,7 +165,7 @@ def evaluate(raw, images, output, sequence, sample_fps, workers, wheel_diameter_
     grid = np.arange(start, end, 0.05)
     dry = np.interp(grid, odom_t, dry_native)
     motion = np.interp(grid, flow_t, flow)
-    full = motion * (np.mean(dry) / np.mean(motion))
+    full, _ = arithmetic_mean_scale(motion, np.mean(dry))
     wheels_rpm = np.column_stack([
         np.interp(grid, wheel_t, wheel_rpm[:, i]) for i in range(4)
     ])
@@ -201,23 +179,24 @@ def evaluate(raw, images, output, sequence, sample_fps, workers, wheel_diameter_
 
     # Also report a scale-normalized comparison. This isolates temporal shape
     # from uncertainty in loaded tire radius and Racepak calibration.
-    wheel_scaled = wheel_reference * (np.mean(dry) / np.mean(wheel_reference))
-    rear_scaled = rear_reference * (np.mean(dry) / np.mean(rear_reference))
+    wheel_scaled, _ = arithmetic_mean_scale(wheel_reference, np.mean(dry))
+    rear_scaled, _ = arithmetic_mean_scale(rear_reference, np.mean(dry))
     metrics = {
         "sequence": sequence,
         "duration_seconds": float(end - start),
         "samples": int(len(grid)),
         "optical_sample_fps": sample_fps,
+        "temporal_smoothing_seconds": 0.0,
         "optical_baseline_px_per_frame": baseline,
         "stationary_runs_used": stop_runs,
         "wheel_diameter_inches": wheel_diameter_inches,
         "primary_reference": "sample-wise median of four wheel encoders",
-        "dry_vs_nominal_wheel": summary(dry, wheel_reference),
-        "full_vs_nominal_wheel": summary(full, wheel_reference),
-        "dry_vs_mean_normalized_wheel": summary(dry, wheel_scaled),
-        "full_vs_mean_normalized_wheel": summary(full, wheel_scaled),
-        "dry_vs_mean_normalized_rear_pair": summary(dry, rear_scaled),
-        "full_vs_mean_normalized_rear_pair": summary(full, rear_scaled),
+        "dry_vs_nominal_wheel": error_summary(dry, wheel_reference),
+        "full_vs_nominal_wheel": error_summary(full, wheel_reference),
+        "dry_vs_mean_normalized_wheel": error_summary(dry, wheel_scaled),
+        "full_vs_mean_normalized_wheel": error_summary(full, wheel_scaled),
+        "dry_vs_mean_normalized_rear_pair": error_summary(dry, rear_scaled),
+        "full_vs_mean_normalized_rear_pair": error_summary(full, rear_scaled),
     }
 
     median_rpm = np.median(wheels_rpm, axis=1)
@@ -261,7 +240,7 @@ def write_report(path, metrics):
         f"Sequence: `{metrics['sequence']}` ({metrics['duration_seconds']:.2f} s).",
         "",
         "The dry method is fused GNSS/INS odometry speed. The full method is the "
-        "repository's dense Farneback preprocessing and median ROI magnitude, "
+        "repository's unsmoothed dense Farneback preprocessing and median ROI magnitude, "
         "baseline-corrected at an odometry-observed stop and normalized to the "
         "dry method's mean speed. Wheel data is not used by either estimate.",
         "",

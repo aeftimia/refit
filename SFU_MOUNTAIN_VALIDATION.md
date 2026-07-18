@@ -43,7 +43,7 @@ to the project's normal 30 fps frame-pair measurement.
    wheel truth.
 3. Derive dry speed from consecutive GPS arcs.
 4. Estimate dense Farneback median flow from consecutive camera frames using the
-   production ROI and preprocessing.
+   production ROI and preprocessing, without temporal smoothing.
 5. Align the unsynchronized GPS clock to camera motion by rank correlation.
 6. Subtract the quietest stop-interval median only if coordinate-derived GPS
    contains a genuine, nonzero-duration zero-speed interval; otherwise use the

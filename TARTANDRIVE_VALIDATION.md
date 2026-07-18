@@ -14,7 +14,8 @@ The public sequence provides:
 The odometry speed is the dry comparison. Optical flow uses the production
 preprocessing and Farneback median-ROI magnitude, subtracts a stationary
 baseline found without consulting wheel data, and is normalized to the
-odometry mean. Wheel measurements are held out for evaluation.
+odometry mean. No temporal smoothing is applied. Wheel measurements are held
+out for evaluation.
 
 The public RGB stream is 10 Hz, so each optical pair spans 0.1 seconds rather
 than the roughly 1/30--1/60 second pair used by typical action-camera footage.

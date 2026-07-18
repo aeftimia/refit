@@ -47,7 +47,6 @@ input_fit=$2
 requested_output=${3:-"${video%.*}_speed.fit"}
 case "$requested_output" in
   *.fit|*.FIT) output_fit=$requested_output ;;
-  *.gpx|*.GPX) output_fit="${requested_output%.*}.fit" ;;
   *) output_fit="${requested_output}.fit" ;;
 esac
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
