@@ -27,7 +27,7 @@ def label(frame, text):
     return frame
 
 
-def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.0):
+def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.0, baseline=None):
     """Generate reusable, production-faithful clips for each flow pipeline stage."""
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -87,6 +87,8 @@ def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.
         "magnitude": output / "05_flow_magnitude.mp4",
         "roi": output / "06_roi_used_for_median.mp4",
     }
+    if baseline is not None:
+        paths["baseline"] = output / "07_baseline_subtracted_magnitude.mp4"
     legacy_roi = output / "06_roi_median_signal.mp4"
     if legacy_roi.exists():
         legacy_roi.unlink()
@@ -118,6 +120,17 @@ def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.
         roi_frame[y0:y1, x0:x1] = heatmap[y0:y1, x0:x1]
         cv2.rectangle(roi_frame, (x0, y0), (x1, y1), (255, 255, 255), 2)
         outputs["roi"].write(label(roi_frame, f"6. Spatial ROI supplied to median reduction | {suffix}"))
+        if baseline is not None:
+            corrected = np.maximum(magnitude - baseline, 0.0)
+            corrected_normalized = np.clip(corrected / display_ceiling * 255, 0, 255).astype(np.uint8)
+            corrected_heatmap = cv2.applyColorMap(corrected_normalized, cv2.COLORMAP_TURBO)
+            corrected_roi = (corrected_heatmap * .22).astype(np.uint8)
+            corrected_roi[y0:y1, x0:x1] = corrected_heatmap[y0:y1, x0:x1]
+            cv2.rectangle(corrected_roi, (x0, y0), (x1, y1), (255, 255, 255), 2)
+            outputs["baseline"].write(label(
+                corrected_roi,
+                f"7. ROI magnitude after subtracting baseline {baseline:.4f} px/frame | {suffix}",
+            ))
 
     for out in outputs.values():
         out.release()
@@ -144,9 +157,10 @@ def main():
     parser.add_argument("--start", type=float, default=375.0)
     parser.add_argument("--duration", type=float, default=10.0)
     parser.add_argument("--sample-fps", type=float, default=4.0)
+    parser.add_argument("--baseline", type=float)
     args = parser.parse_args()
     generate_optical_flow_demo(
-        args.video, args.output_dir, args.start, args.duration, args.sample_fps
+        args.video, args.output_dir, args.start, args.duration, args.sample_fps, args.baseline
     )
 
 

@@ -297,8 +297,8 @@ def optical_motion(
     vals = np.array([x[1] for x in samples], dtype=float)
     kernel = max(3, int(round(sample_fps * 2)) | 1)
     vals = np.convolve(vals, np.ones(kernel) / kernel, mode="same")
-    floor = float(np.percentile(vals, 5))
-    vals = np.maximum(vals - floor, 0.0)
+    # Do not assume any fixed fraction of the recording represents zero motion.
+    # Until a supported baseline estimate exists, the conservative floor is zero.
     return np.array([x[0] for x in samples]), vals
 
 
@@ -333,10 +333,40 @@ def speed_series(points, times):
 
     # Resample and smooth GPS jitter before comparing its shape with optical motion.
     uniform_t = np.arange(math.ceil(epoch[0]), math.floor(epoch[-1]) + 1, dtype=float)
-    uniform_v = np.interp(uniform_t, epoch, values)
+    raw_uniform_v = np.interp(uniform_t, epoch, values)
+    uniform_v = raw_uniform_v.copy()
     if len(uniform_v) >= 7:
         uniform_v = np.convolve(uniform_v, np.ones(7) / 7, mode="same")
-    return uniform_t, uniform_v, source
+    return uniform_t, uniform_v, raw_uniform_v, source
+
+
+def estimate_stationary_baseline(video_start, motion_t, motion_v, gps_t, raw_gps_v):
+    """Use the quietest median among observed, nonzero-duration GPS stops."""
+    stationary = np.isclose(raw_gps_v, 0.0, atol=1e-9)
+    intervals = []
+    start = None
+    for i, stopped in enumerate(stationary):
+        if stopped and start is None:
+            start = i
+        if start is not None and (not stopped or i == len(stationary) - 1):
+            end = i if stopped and i == len(stationary) - 1 else i - 1
+            # At least two 1 Hz timestamps establish a nonzero-duration interval.
+            if end > start:
+                intervals.append((gps_t[start], gps_t[end]))
+            start = None
+
+    absolute_motion_t = video_start.timestamp() + motion_t
+    medians = []
+    supporting_samples = 0
+    for start_time, end_time in intervals:
+        selected = (absolute_motion_t >= start_time) & (absolute_motion_t <= end_time)
+        if selected.any():
+            values = motion_v[selected]
+            medians.append(float(np.median(values)))
+            supporting_samples += int(selected.sum())
+    if not medians:
+        return 0.0, 0, 0
+    return min(medians), len(medians), supporting_samples
 
 
 def rank_values(values):
@@ -476,7 +506,7 @@ def main():
         parallel_decode=args.dry_run,
     )
     if args.sync_range:
-        gps_t, gps_v, speed_source = speed_series(track_points, times)
+        gps_t, gps_v, raw_gps_v, speed_source = speed_series(track_points, times)
         offset, sync_score, zero_score, sync_samples, at_limit = find_clock_offset(
             video_start, motion_t, motion_v, gps_t, gps_v, args.sync_range
         )
@@ -492,6 +522,18 @@ def main():
             print("Warning: automatic clock alignment has low confidence", file=sys.stderr)
         if at_limit:
             print("Warning: best clock alignment is at the search limit", file=sys.stderr)
+        if not args.dry_run:
+            baseline, stop_count, baseline_samples = estimate_stationary_baseline(
+                video_start, motion_t, motion_v, gps_t, raw_gps_v
+            )
+            motion_v = np.maximum(motion_v - baseline, 0.0)
+            if stop_count:
+                print(
+                    f"Optical baseline: {baseline:.6f} px/frame from the quietest "
+                    f"of {stop_count} stationary intervals ({baseline_samples} samples)"
+                )
+            else:
+                print("Optical baseline: 0 (no observed stationary interval)")
 
     start, end = intersect_window(video_start, video_end, times[0], times[-1])
     if start != video_start or end != video_end:
