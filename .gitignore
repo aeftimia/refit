@@ -1,0 +1,14 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+venv/
+
+# Generated telemetry and media
+*.fit
+*.gpx
+*.mp4
+*.insv
+
+# Temporary files
+*.tmp
+*.log
