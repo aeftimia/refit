@@ -27,7 +27,7 @@ except ImportError as exc:
 from optical_flow_pipeline import blur_frame, median_flow_magnitude
 from speed_estimation import (
     find_rank_offset, haversine_distance, stationary_interval_baseline,
-    time_mean_scale,
+    split_fit_timestamp_shift, time_mean_scale,
 )
 
 from fit_binary import FitBinary
@@ -403,10 +403,22 @@ def main():
     # Optical-motion times are relative to the original video, even when the
     # beginning or end of the output is clipped to the FIT range.
     offsets = np.array([(t - video_start).total_seconds() for t in selected_times])
+    encoded_shift, sampling_phase = split_fit_timestamp_shift(clock_offset)
     if args.dry_run:
         print("Dry-run mode: preserving every original FIT message, speed, and position")
+        if abs(sampling_phase) > 1e-9:
+            print(
+                f"Dry-run subsecond residual: {sampling_phase:+.3f}s is not applied "
+                "because that would alter Garmin speed values"
+            )
     else:
-        relative = np.interp(offsets, motion_t, motion_v, left=motion_v[0], right=motion_v[-1])
+        relative = np.interp(
+            offsets + sampling_phase,
+            motion_t,
+            motion_v,
+            left=motion_v[0],
+            right=motion_v[-1],
+        )
         speeds, scale = time_mean_scale(offsets, relative, avg_speed)
         if scale == 0.0:
             print("Warning: no usable optical motion; writing constant average speed", file=sys.stderr)
@@ -415,7 +427,7 @@ def main():
         for message, timestamp, _ in fit_file.gps_metadata_points():
             when = datetime.fromtimestamp(timestamp, timezone.utc)
             if start <= when <= end:
-                relative_time = (when - video_start).total_seconds()
+                relative_time = (when - video_start).total_seconds() + sampling_phase
                 speed = (
                     avg_speed if scale == 0.0 else scale * np.interp(
                         relative_time, motion_t, motion_v,
@@ -425,12 +437,17 @@ def main():
                 fit_file.set_gps_metadata_speed(
                     message, float(speed)
                 )
+        if abs(sampling_phase) > 1e-9:
+            print(
+                f"Applied {sampling_phase:+.3f}s synthetic-speed phase compensation "
+                "for whole-second FIT timestamps"
+            )
 
     # Insta360 aligns FIT records against the uncorrected MP4 clock. Shift all
     # recognized original messages while retaining Garmin-specific payloads.
-    if clock_offset:
-        fit_file.shift_timestamps(-clock_offset)
-        print(f"Shifted output FIT timestamps by {-clock_offset:+.2f}s for the MP4 clock")
+    if encoded_shift:
+        fit_file.shift_timestamps(encoded_shift)
+        print(f"Shifted output FIT timestamps by {encoded_shift:+d}s for the MP4 clock")
 
     fit_file.write(args.output)
     print(f"Video UTC window: {video_start.isoformat()} to {video_end.isoformat()}")

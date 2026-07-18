@@ -41,6 +41,9 @@ bash insta360_video_speed_fit.sh [--dry-run] VIDEO.mp4 GARMIN.fit OUTPUT.fit
     coordinate distance over the video/FIT overlap.
 13. Patch both record `enhanced_speed` and the denser Garmin GPS-metadata speed
     values while preserving every other original FIT field.
+14. Encode the clock correction in whole-second FIT timestamps and apply any
+    fractional remainder to synthetic-speed sampling, preserving subsecond
+    video alignment without modifying the source video.
 
 The baseline method assumes that the Garmin zero-speed intervals are genuine stops.
 Camera rotation during a stop can raise its median motion, which is why the

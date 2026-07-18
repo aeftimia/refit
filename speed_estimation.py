@@ -35,6 +35,19 @@ def haversine_distances(latitude, longitude):
     return EARTH_RADIUS_METRES * 2 * np.arcsin(np.sqrt(value))
 
 
+def split_fit_timestamp_shift(clock_offset):
+    """Split a clock correction into FIT seconds and a speed-sampling phase.
+
+    Standard activity timestamps encode whole seconds. The returned phase is
+    added to synthetic-signal sample times so their displayed video positions
+    retain the original subsecond correction.
+    """
+    desired_shift = -float(clock_offset)
+    encoded_seconds = round(desired_shift)
+    sampling_phase = encoded_seconds - desired_shift
+    return encoded_seconds, sampling_phase
+
+
 def averaged_ranks(values):
     """Return zero-based ranks, assigning the average rank to tied values."""
     values = np.asarray(values, dtype=float)
