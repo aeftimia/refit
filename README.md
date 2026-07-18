@@ -10,7 +10,11 @@ speed. Dry-run mode keeps the Strava-derived speed for comparison.
 1. Uniformly sample adjacent video-frame pairs.
 2. Downscale each frame to 640 pixels wide, convert it to grayscale, and apply
    the shared preprocessing in `optical_flow_pipeline.py`.
-3. Compute dense Farneback optical flow.
+3. Compute dense Farneback optical flow between source frames `N` and `N+1`.
+   Sampling controls how often one of these adjacent-frame pairs is measured;
+   it does not increase the time separating the two frames in a pair. For
+   example, 4 Hz analysis of 60 fps video uses approximately `(0, 1)`,
+   `(15, 16)`, `(30, 31)`, and so on.
 4. Convert each per-pixel flow vector to magnitude.
 5. Retain the central spatial ROI and reduce it to its median magnitude.
 6. Temporally smooth the resulting scalar motion series.
@@ -45,6 +49,14 @@ python make_optical_flow_demo.py VIDEO.mp4 OUTPUT_DIR \
   --start 375 --duration 10 --sample-fps 4 --baseline 0.12
 ```
 
-The optional baseline stage remains a spatial magnitude heatmap. The subsequent
-ROI median and temporal speed series are scalar reductions and are intended to
-be explained rather than presented as video transformations.
+The consecutive-frame demonstration combines both actual Farneback inputs in a
+single temporal overlay: frame `N` contributes magenta, frame `N+1` contributes
+green, and unchanged brightness appears gray. The vector stage retains this
+overlay as its background and colors every displayed arrow with the same global
+Turbo magnitude scale used by the following heatmap. This composite is
+explanatory rather than an input: Farneback compares the two grayscale frames
+directly, and an absolute-difference image would discard the direction needed to
+estimate vectors. The optional baseline stage remains a spatial magnitude
+heatmap. The subsequent ROI median and temporal speed series are scalar
+reductions and are intended to be explained rather than presented as video
+transformations.
