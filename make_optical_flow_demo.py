@@ -23,13 +23,34 @@ def writer(path, fps, size, color=True):
 
 def label(frame, text):
     cv2.rectangle(frame, (0, 0), (frame.shape[1], 34), (0, 0, 0), -1)
-    cv2.putText(frame, text, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, .62, (255, 255, 255), 1, cv2.LINE_AA)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = .62
+    text_width = cv2.getTextSize(text, font, scale, 1)[0][0]
+    if text_width > frame.shape[1] - 20:
+        scale *= (frame.shape[1] - 20) / text_width
+    cv2.putText(frame, text, (10, 24), font, scale, (255, 255, 255), 1, cv2.LINE_AA)
     return frame
 
 
+def temporal_pair_overlay(previous, current):
+    """Encode two grayscale frames as magenta/green temporal evidence."""
+    return np.dstack((previous, current, previous))
+
+
+def default_demo_output_dir(start, duration):
+    """Return a stable Movies folder name derived from the video time range."""
+    def timestamp_slug(seconds):
+        whole_seconds = max(0, int(seconds))
+        return f"{whole_seconds // 60:02d}{whole_seconds % 60:02d}"
+
+    duration_slug = f"{duration:g}".replace(".", "p")
+    range_slug = f"{timestamp_slug(start)}-{timestamp_slug(start + duration)}"
+    return Path.home() / "Movies" / f"optical-flow-demo-{duration_slug}s-{range_slug}"
+
+
 def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.0, baseline=None):
-    """Generate reusable, production-faithful clips for each flow pipeline stage."""
-    output = Path(output_dir)
+    """Generate production-faithful stage clips and one timeline-continuous splice."""
+    output = Path(output_dir) if output_dir else default_demo_output_dir(start, duration)
     output.mkdir(parents=True, exist_ok=True)
     subprocess.run([
         "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
@@ -60,12 +81,12 @@ def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.
         if not ok:
             break
         frame_number += 1
-        _, _, first_blurred = preprocess_frame(first)
-        downscaled, gray, blurred = preprocess_frame(second)
+        _, first_gray, first_blurred = preprocess_frame(first)
+        _, gray, blurred = preprocess_frame(second)
         flow = calculate_flow(first_blurred, blurred)
         magnitude = flow_magnitudes(flow)
         observations.append((
-            downscaled, gray, first_blurred, blurred, flow, magnitude,
+            first_gray, gray, first_blurred, blurred, flow, magnitude,
             first_frame_number,
         ))
 
@@ -79,28 +100,42 @@ def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.
     if not observations:
         raise RuntimeError("No observations decoded")
 
-    h, w = observations[0][1].shape
+    h, w = observations[0][0].shape
     size = (w, h)
     magnitudes = np.concatenate([x[5].ravel() for x in observations])
     display_ceiling = max(float(np.percentile(magnitudes, 99)), 1e-6)
     paths = {
-        "down": output / "01_downscaled_640.mp4",
-        "gray": output / "02_grayscale.mp4",
-        "blur": output / "03_gaussian_blur_5x5.mp4",
-        "pair": output / "04_consecutive_frame_overlay.mp4",
-        "vectors": output / "05_farneback_flow_vectors.mp4",
-        "magnitude": output / "06_flow_magnitude.mp4",
-        "roi": output / "07_roi_used_for_median.mp4",
+        "gray": output / "01_grayscale_pair_overlay.mp4",
+        "blur": output / "02_blurred_pair_overlay.mp4",
+        "vectors": output / "03_farneback_flow_vectors.mp4",
+        "magnitude": output / "04_flow_magnitude.mp4",
+        "roi": output / "05_roi_used_for_median.mp4",
     }
     if baseline is not None:
-        paths["baseline"] = output / "08_baseline_subtracted_magnitude.mp4"
+        paths["baseline"] = output / "06_baseline_subtracted_magnitude.mp4"
     for legacy_name in (
+        "01_downscaled_640.mp4",
+        "01_downscaled_pair_overlay.mp4",
+        "02_grayscale.mp4",
+        "02_grayscale_pair_overlay.mp4",
+        "03_gaussian_blur_5x5.mp4",
+        "03_blurred_pair_overlay.mp4",
+        "03_farneback_flow_vectors.mp4",
         "04_farneback_flow_vectors.mp4",
+        "04_consecutive_frame_overlay.mp4",
         "04_consecutive_frame_pair_and_difference.mp4",
+        "04_flow_magnitude.mp4",
         "05_flow_magnitude.mp4",
+        "05_farneback_flow_vectors.mp4",
+        "05_roi_used_for_median.mp4",
+        "06_flow_magnitude.mp4",
         "06_roi_used_for_median.mp4",
         "06_roi_median_signal.mp4",
+        "06_baseline_subtracted_magnitude.mp4",
         "07_baseline_subtracted_magnitude.mp4",
+        "07_roi_used_for_median.mp4",
+        "08_baseline_subtracted_magnitude.mp4",
+        "99_all_stages_spliced.mp4",
     ):
         legacy_path = output / legacy_name
         if legacy_path.exists():
@@ -108,27 +143,34 @@ def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.
     outputs = {name: writer(path, sample_fps, size) for name, path in paths.items()}
 
     x0, y0, x1, y1 = roi_bounds((h, w))
-    for (downscaled, gray, first_blurred, blurred, flow, magnitude,
+    for (first_gray, gray, first_blurred, blurred, flow, magnitude,
          first_frame_number) in observations:
         timestamp = first_frame_number / source_fps
         suffix = f"video {timestamp // 60:02.0f}:{timestamp % 60:05.2f}"
-        outputs["down"].write(label(downscaled.copy(), f"1. Downscaled to {w}x{h} | {suffix}"))
-        outputs["gray"].write(label(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR), f"2. Grayscale | {suffix}"))
-        outputs["blur"].write(label(cv2.cvtColor(blurred, cv2.COLOR_GRAY2BGR), f"3. Gaussian blur {BLUR_KERNEL[0]}x{BLUR_KERNEL[1]} | {suffix}"))
-
-        # A single-frame visualization of both temporal inputs. Equal brightness
-        # lands on gray; previous-only structure is magenta and current-only
-        # structure is green. This is explanatory—the estimator consumes the two
-        # grayscale frames, not this composite.
-        pair_overlay = np.dstack((first_blurred, blurred, first_blurred))
-        outputs["pair"].write(label(
+        # Temporal color is a display encoding applied consistently to both
+        # production inputs. It is not an array consumed by Farneback.
+        gray_pair = temporal_pair_overlay(first_gray, gray)
+        pair_overlay = temporal_pair_overlay(first_blurred, blurred)
+        timing = f"magenta=N, green=N+1 (+{1000 / source_fps:.2f} ms)"
+        outputs["gray"].write(label(
+            gray_pair, f"1. Both frames grayscale at {w}x{h} | {timing} | {suffix}",
+        ))
+        outputs["blur"].write(label(
             pair_overlay.copy(),
-            f"4. Pair overlay: magenta=N, green=N+1 | +{1000 / source_fps:.2f} ms | {suffix}",
+            f"2. Both frames Gaussian-blurred {BLUR_KERNEL[0]}x{BLUR_KERNEL[1]} | overlay retained | {suffix}",
         ))
 
         normalized = np.clip(magnitude / display_ceiling * 255, 0, 255).astype(np.uint8)
         heatmap = cv2.applyColorMap(normalized, cv2.COLORMAP_TURBO)
-        vector_frame = pair_overlay.copy()
+        # Turbo spans most hues, so hue choice alone cannot separate every arrow
+        # from a colored background. Retain the temporal overlay at lower
+        # saturation/value, then outline each arrow adaptively below.
+        pair_gray = cv2.cvtColor(pair_overlay, cv2.COLOR_BGR2GRAY)
+        vector_frame = cv2.addWeighted(
+            cv2.cvtColor(pair_gray, cv2.COLOR_GRAY2BGR), .45,
+            pair_overlay, .25,
+            0,
+        )
         spacing = 32
         arrow_scale = 8
         for y in range(spacing // 2, h, spacing):
@@ -136,21 +178,28 @@ def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.
                 dx, dy = flow[y, x]
                 end = (round(x + arrow_scale * dx), round(y + arrow_scale * dy))
                 color = tuple(int(channel) for channel in heatmap[y, x])
+                blue, green, red = color
+                luminance = .114 * blue + .587 * green + .299 * red
+                halo = (255, 255, 255) if luminance < 110 else (0, 0, 0)
                 cv2.arrowedLine(
-                    vector_frame, (x, y), end, color, 1, cv2.LINE_AA,
+                    vector_frame, (x, y), end, halo, 4, cv2.LINE_AA,
+                    tipLength=.3,
+                )
+                cv2.arrowedLine(
+                    vector_frame, (x, y), end, color, 2, cv2.LINE_AA,
                     tipLength=.3,
                 )
         outputs["vectors"].write(label(
             vector_frame,
-            f"5. Flow vectors: direction=arrow, magnitude=Turbo color | {suffix}",
+            f"3. Vectors: direction=arrow, magnitude=Turbo color | {suffix}",
         ))
 
-        outputs["magnitude"].write(label(heatmap.copy(), f"6. Flow magnitude (global 99th-percentile scale) | {suffix}"))
+        outputs["magnitude"].write(label(heatmap.copy(), f"4. Flow magnitude (global 99th-percentile scale) | {suffix}"))
 
         roi_frame = (heatmap * .22).astype(np.uint8)
         roi_frame[y0:y1, x0:x1] = heatmap[y0:y1, x0:x1]
         cv2.rectangle(roi_frame, (x0, y0), (x1, y1), (255, 255, 255), 2)
-        outputs["roi"].write(label(roi_frame, f"7. Spatial ROI supplied to median reduction | {suffix}"))
+        outputs["roi"].write(label(roi_frame, f"5. Spatial ROI supplied to median reduction | {suffix}"))
         if baseline is not None:
             corrected = np.maximum(magnitude - baseline, 0.0)
             corrected_normalized = np.clip(corrected / display_ceiling * 255, 0, 255).astype(np.uint8)
@@ -160,7 +209,7 @@ def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.
             cv2.rectangle(corrected_roi, (x0, y0), (x1, y1), (255, 255, 255), 2)
             outputs["baseline"].write(label(
                 corrected_roi,
-                f"8. ROI magnitude after subtracting baseline {baseline:.4f} px/frame | {suffix}",
+                f"6. ROI magnitude after subtracting baseline {baseline:.4f} px/frame | {suffix}",
             ))
 
     for out in outputs.values():
@@ -178,13 +227,64 @@ def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.
         ], check=True)
         path.unlink()
         temporary.replace(path)
-    print(f"Wrote source + {len(outputs)} processed clips with {len(observations)} observations to {output}")
+
+    # Preserve the underlying video timeline while changing stages: stage i
+    # contributes the corresponding i-th slice, rather than every stage
+    # restarting at the beginning of the requested interval.
+    stage_paths = list(paths.values())
+    stage_count = len(stage_paths)
+    frame_count = len(observations)
+    if frame_count < stage_count:
+        raise ValueError(
+            f"Demo has only {frame_count} observations for {stage_count} stages; "
+            "increase duration or sample rate"
+        )
+    boundaries = [round(i * frame_count / stage_count) for i in range(stage_count + 1)]
+    spliced_path = output / "99_all_stages_spliced.mp4"
+    spliced_temporary = output / "99_all_stages_spliced.mp4v.mp4"
+    spliced_writer = writer(spliced_temporary, sample_fps, size)
+    written = 0
+    for path, first_frame, last_frame in zip(
+        stage_paths, boundaries, boundaries[1:]
+    ):
+        stage_capture = cv2.VideoCapture(str(path))
+        if not stage_capture.isOpened():
+            raise RuntimeError(f"Could not reopen stage for splicing: {path}")
+        for frame_index in range(last_frame):
+            ok, frame = stage_capture.read()
+            if not ok:
+                stage_capture.release()
+                raise RuntimeError(
+                    f"Stage {path.name} ended before frame {last_frame}"
+                )
+            if frame_index >= first_frame:
+                spliced_writer.write(frame)
+                written += 1
+        stage_capture.release()
+    spliced_writer.release()
+    if written != frame_count:
+        raise RuntimeError(f"Stage splice wrote {written} of {frame_count} frames")
+    subprocess.run([
+        "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+        "-i", str(spliced_temporary), "-an", "-c:v", "libx264",
+        "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart", "-y", str(spliced_path),
+    ], check=True)
+    spliced_temporary.unlink()
+
+    print(
+        f"Wrote source + {len(outputs)} processed clips + 1 stage splice "
+        f"with {len(observations)} observations to {output}"
+    )
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("video")
-    parser.add_argument("output_dir")
+    parser.add_argument(
+        "output_dir", nargs="?",
+        help="default: ~/Movies/optical-flow-demo-{duration}s-{start}-{end}",
+    )
     parser.add_argument("--start", type=float, default=375.0)
     parser.add_argument("--duration", type=float, default=10.0)
     parser.add_argument("--sample-fps", type=float, default=4.0)
