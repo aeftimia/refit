@@ -3,12 +3,13 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: insta360_video_speed_fit.sh [--dry-run] VIDEO.mp4 GARMIN.fit [OUTPUT.fit]
+Usage: insta360_video_speed_fit.sh [--full] VIDEO.mp4 GARMIN.fit [OUTPUT.fit]
 
 Options:
-  --dry-run        Auto-sync and write original GPS-derived motion without
-                   replacing it with optical-flow speeds. Every original FIT
-                   message is retained.
+  --dry-run        Explicitly select the default: auto-sync while preserving
+                   original Garmin speeds and every FIT message.
+  --full           Replace speeds with a fresh optical-flow estimate after
+                   auto-syncing. This is slower and must be requested explicitly.
 
 Environment variables:
   VIDEO_TIMEZONE   Time zone used when MP4 metadata has no offset (default: UTC).
@@ -20,11 +21,15 @@ Environment variables:
 EOF
 }
 
-dry_run=0
+full_run=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)
-      dry_run=1
+      full_run=0
+      shift
+      ;;
+    --full)
+      full_run=1
       shift
       ;;
     --)
@@ -81,10 +86,10 @@ run_processor() {
     "$@"
 }
 
-if [[ "$dry_run" == 1 ]]; then
-  run_processor --dry-run
+if [[ "$full_run" == 1 ]]; then
+  run_processor --full
 else
-  run_processor
+  run_processor --dry-run
 fi
 
 echo "Wrote $output_fit"

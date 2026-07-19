@@ -315,9 +315,14 @@ def main():
     p.add_argument("--metadata-json", required=True)
     p.add_argument("--default-timezone", default="UTC")
     p.add_argument("--sample-fps", type=float, default=4.0)
-    p.add_argument(
-        "--dry-run", action="store_true",
-        help="auto-sync and preserve the Garmin FIT speed instead of replacing it",
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--dry-run", dest="dry_run", action="store_true", default=True,
+        help="auto-sync while preserving Garmin speeds (default)",
+    )
+    mode.add_argument(
+        "--full", dest="dry_run", action="store_false",
+        help="replace speeds with a fresh optical-flow estimate",
     )
     p.add_argument(
         "--sync-range", type=float, default=300.0,
