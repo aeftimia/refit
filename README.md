@@ -8,10 +8,34 @@ GPS metadata, heart rate, elevation, events, and device information. By default,
 the command synchronizes timestamps while keeping Garmin speeds. Optical speed
 replacement is slower and requires an explicit `--full` flag.
 
+The shortest workflow needs only the video. The first run prompts securely for
+Garmin Connect credentials and MFA when required; later runs reuse refreshable
+tokens stored in `~/.garminconnect`. The matching original FIT is cached under
+`~/.cache/refit/garmin`, then passed through the same lossless transformation.
+
+```bash
+bash insta360_video_speed_fit.sh VIDEO.mp4
+```
+
+The default output is `<video-basename>_speed.fit` in the directory where the
+command is run. For example, running against `/Volumes/Camera/VID_001.mp4` from
+`~/Downloads` writes `~/Downloads/VID_001_speed.fit`.
+
+Local files and explicit output paths remain supported:
+
 ```bash
 bash insta360_video_speed_fit.sh VIDEO.mp4 GARMIN.fit OUTPUT.fit
+bash insta360_video_speed_fit.sh --output OUTPUT.fit VIDEO.mp4
 bash insta360_video_speed_fit.sh --full VIDEO.mp4 GARMIN.fit OUTPUT.fit
 ```
+
+Automatic selection searches Garmin activities around the video date and picks
+the activity with the greatest timeline overlap. Use `--activity-id ID` to
+override selection, or `--token-store DIR` to isolate the authorization cache.
+The Garmin Connect downloader uses Garmin's mobile authentication flow through
+the third-party `garminconnect` package; it is separate from Garmin's official
+Activity API, which requires Developer Program approval for a registered cloud
+integration.
 
 ## Optical speed pipeline
 
