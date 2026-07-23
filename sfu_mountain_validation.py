@@ -22,7 +22,7 @@ import urllib.request
 import cv2
 import numpy as np
 
-from optical_flow_pipeline import blur_frame, median_flow_magnitude, resize_frame, grayscale_frame
+from optical_flow_pipeline import median_flow_magnitude, resize_frame, grayscale_frame
 from speed_estimation import (
     arithmetic_mean_scale, error_summary, find_rank_offset, haversine_distances,
     stationary_interval_baseline,
@@ -209,7 +209,7 @@ def optical_series(archive_path, members, start, end):
             frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
             if frame is None:
                 raise ValueError(f"cannot decode {name}")
-            gray = blur_frame(grayscale_frame(resize_frame(frame)))
+            gray = grayscale_frame(resize_frame(frame))
             if previous is not None:
                 values.append(median_flow_magnitude(previous, gray))
                 times.append(when)

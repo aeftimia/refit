@@ -1,9 +1,12 @@
 import io
+import sys
 import unittest
 import zipfile
+from contextlib import redirect_stderr
 from datetime import datetime, timezone
+from unittest.mock import patch
 
-from garmin_connect_fit import choose_activity, extract_fit
+from garmin_connect_fit import choose_activity, extract_fit, prompt_line
 
 
 def fake_fit(size=20):
@@ -75,6 +78,16 @@ class DownloadExtractionTests(unittest.TestCase):
     def test_rejects_non_fit_download(self):
         with self.assertRaisesRegex(ValueError, "not a valid FIT"):
             extract_fit(b"not a fit")
+
+
+class PromptTests(unittest.TestCase):
+    def test_prompt_is_visible_on_stderr_and_stdout_stays_clean(self):
+        stderr = io.StringIO()
+        with patch.object(sys, "stdin", io.StringIO("rider@example.com\n")):
+            with redirect_stderr(stderr):
+                answer = prompt_line("Garmin email: ")
+        self.assertEqual(answer, "rider@example.com")
+        self.assertEqual(stderr.getvalue(), "Garmin email: ")
 
 
 if __name__ == "__main__":

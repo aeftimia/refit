@@ -10,6 +10,10 @@ Options:
                    original Garmin speeds and every FIT message.
   --full           Replace speeds with a fresh optical-flow estimate after
                    auto-syncing. This is slower and must be requested explicitly.
+  --clock-drift    Experimentally fit both clock offset and linear clock-rate
+                   error (starts at 5000 ppm and expands if necessary).
+  --clock-drift-ppm N
+                   Set the affine clock-rate search bound explicitly.
   --activity-id ID Download a specific Garmin Connect activity instead of
                    selecting the activity that best overlaps the video.
   --token-store DIR
@@ -17,6 +21,8 @@ Options:
   -o, --output FIT Output path. Useful when GARMIN.fit is downloaded automatically.
 
 Environment variables:
+  REFIT_PYTHON     Python interpreter to use. By default, the repository's
+                   venv/bin/python is preferred when available.
   VIDEO_TIMEZONE   Time zone used when MP4 metadata has no offset (default: UTC).
                    Examples: UTC, America/New_York, +02:00
   SAMPLE_FPS       Optical-flow samples per second (default: 4)
@@ -27,6 +33,8 @@ EOF
 }
 
 full_run=0
+clock_drift_ppm=0
+clock_drift_auto=0
 activity_id=
 token_store=${GARMIN_TOKEN_STORE:-~/.garminconnect}
 requested_output=
@@ -39,6 +47,17 @@ while [[ $# -gt 0 ]]; do
     --full)
       full_run=1
       shift
+      ;;
+    --clock-drift)
+      clock_drift_ppm=5000
+      clock_drift_auto=1
+      shift
+      ;;
+    --clock-drift-ppm)
+      [[ $# -ge 2 ]] || { echo "Error: --clock-drift-ppm requires a value" >&2; exit 2; }
+      clock_drift_ppm=$2
+      clock_drift_auto=0
+      shift 2
       ;;
     --activity-id)
       [[ $# -ge 2 ]] || { echo "Error: --activity-id requires a value" >&2; exit 2; }
@@ -89,14 +108,25 @@ esac
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 python_script="$script_dir/video_speed_fit.py"
 garmin_script="$script_dir/garmin_connect_fit.py"
+if [[ -n "${REFIT_PYTHON:-}" ]]; then
+  python_bin=$REFIT_PYTHON
+elif [[ -x "$script_dir/venv/bin/python" ]]; then
+  python_bin="$script_dir/venv/bin/python"
+else
+  python_bin=python3
+fi
 
-for command in exiftool ffmpeg python3; do
+for command in exiftool ffmpeg; do
   command -v "$command" >/dev/null || { echo "Error: $command is required." >&2; exit 127; }
 done
+command -v "$python_bin" >/dev/null || {
+  echo "Error: Python interpreter not found: $python_bin" >&2
+  exit 127
+}
 [[ -f "$video" ]] || { echo "Error: video not found: $video" >&2; exit 2; }
 [[ -f "$python_script" ]] || { echo "Error: processor not found: $python_script" >&2; exit 2; }
-python3 -c 'import fit_tool' 2>/dev/null || {
-  echo "Error: fit-tool is required. Install with: python3 -m pip install -r requirements.txt" >&2
+"$python_bin" -c 'import fit_tool' 2>/dev/null || {
+  echo "Error: fit-tool is required. Install with: $python_bin -m pip install -r $script_dir/requirements.txt" >&2
   exit 127
 }
 
@@ -122,11 +152,16 @@ else
   if [[ -n "$activity_id" ]]; then
     garmin_args+=(--activity-id "$activity_id")
   fi
-  input_fit=$(python3 "$garmin_script" "${garmin_args[@]}")
+  input_fit=$("$python_bin" "$garmin_script" "${garmin_args[@]}")
+fi
+
+clock_args=(--clock-drift-ppm "$clock_drift_ppm")
+if [[ "$clock_drift_auto" == 1 ]]; then
+  clock_args+=(--clock-drift-auto)
 fi
 
 run_processor() {
-  python3 "$python_script" \
+  "$python_bin" "$python_script" \
     --video "$video" \
     --fit "$input_fit" \
     --output "$output_fit" \
@@ -135,6 +170,7 @@ run_processor() {
     --flow-workers "${FLOW_WORKERS:-16}" \
     --sync-range "${SYNC_RANGE:-300}" \
     --sample-fps "${SAMPLE_FPS:-4}" \
+    "${clock_args[@]}" \
     "$@"
 }
 

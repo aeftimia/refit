@@ -196,6 +196,56 @@ class FitBinary:
                 if value not in (0, 0xFFFFFFFF):
                     self.set_scalar(field, value + seconds)
 
+    def warp_timestamps(self, video_start, offset_start, clock_rate):
+        """Map FIT clock timestamps onto an affine video clock."""
+        video_start = float(video_start)
+        offset_start = float(offset_start)
+        clock_rate = float(clock_rate)
+        if clock_rate <= -1:
+            raise ValueError("clock rate must preserve timestamp ordering")
+
+        extra_utc_fields = {
+            0: (4,),       # file_id.time_created
+            18: (2,),      # session.start_time
+            19: (2,),      # lap.start_time
+        }
+
+        def transform(unix_time):
+            relative = unix_time - video_start - offset_start
+            return round(video_start + relative / (1 + clock_rate))
+
+        for message in self.messages:
+            fields = message.fields
+            original_reference = None
+            timestamp_field = fields.get(253)
+            if timestamp_field is not None and timestamp_field.size == 4:
+                value = self.scalar(timestamp_field)
+                if value not in (0, 0xFFFFFFFF):
+                    original_reference = value + FIT_EPOCH_UNIX
+
+            ids = ([253] if 253 in fields else []) + list(
+                extra_utc_fields.get(message.global_id, ())
+            )
+            for field_id in ids:
+                field = fields.get(field_id)
+                if field is None or field.size != 4:
+                    continue
+                value = self.scalar(field)
+                if value not in (0, 0xFFFFFFFF):
+                    warped = transform(value + FIT_EPOCH_UNIX) - FIT_EPOCH_UNIX
+                    self.set_scalar(field, warped)
+
+            # activity.local_timestamp is wall-clock time, not UTC. Apply the
+            # UTC timestamp's correction rather than evaluating drift against
+            # the time-zone-shifted scalar itself.
+            if message.global_id == 34 and 5 in fields:
+                local = fields[5]
+                value = self.scalar(local)
+                if value not in (0, 0xFFFFFFFF):
+                    reference = original_reference or (value + FIT_EPOCH_UNIX)
+                    delta = transform(reference) - reference
+                    self.set_scalar(local, round(value + delta))
+
     def write(self, output):
         output = Path(output)
         output.parent.mkdir(parents=True, exist_ok=True)

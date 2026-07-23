@@ -118,6 +118,117 @@ def find_rank_offset(
     return best_offset, best_score, zero_score, count, at_limit
 
 
+def find_rank_affine(
+    motion_times,
+    motion,
+    reference_times,
+    reference,
+    search_range,
+    *,
+    max_drift_ppm=5000.0,
+    minimum_samples=20,
+    support_penalty=0.0,
+):
+    """Fit offset plus linear clock-rate error by rank correlation.
+
+    Returns the offset at the first motion sample and the fractional clock-rate
+    error. A rate of 0.001 means the reference clock gains one second per 1,000
+    seconds of video.
+    """
+    motion_times = np.asarray(motion_times, dtype=float)
+    motion = np.asarray(motion, dtype=float)
+    reference_times = np.asarray(reference_times, dtype=float)
+    reference = np.asarray(reference, dtype=float)
+    duration = float(motion_times[-1] - motion_times[0])
+    if duration <= 0:
+        raise ValueError("affine clock fitting requires increasing motion times")
+    if max_drift_ppm < 0:
+        raise ValueError("max_drift_ppm cannot be negative")
+
+    static_offset, static_score, zero_score, _, static_at_limit = find_rank_offset(
+        motion_times,
+        motion,
+        reference_times,
+        reference,
+        search_range,
+        minimum_samples=minimum_samples,
+        support_penalty=support_penalty,
+    )
+    if max_drift_ppm == 0:
+        return (
+            static_offset, 0.0, static_score, static_score, zero_score,
+            int(len(motion_times)), static_at_limit, False,
+        )
+
+    midpoint = (motion_times[0] + motion_times[-1]) / 2
+    position = (motion_times - midpoint) / duration
+    max_total_drift = duration * max_drift_ppm / 1_000_000
+
+    def score(center_offset, total_drift):
+        if (
+            abs(center_offset - total_drift / 2) > search_range
+            or abs(center_offset + total_drift / 2) > search_range
+        ):
+            return -2.0, 0
+        query = motion_times + center_offset + total_drift * position
+        valid = (query >= reference_times[0]) & (query <= reference_times[-1])
+        count = int(valid.sum())
+        if count < minimum_samples:
+            return -2.0, count
+        value = rank_correlation(
+            motion[valid], np.interp(query[valid], reference_times, reference)
+        )
+        value -= support_penalty * (1 - valid.mean())
+        return value, count
+
+    drift_step = min(0.25, max_total_drift) if max_total_drift else 0.25
+    coarse_drifts = np.arange(
+        -max_total_drift,
+        max_total_drift + drift_step / 2,
+        drift_step,
+    )
+    center_radius = max(1.0, max_total_drift / 2)
+    coarse_centers = np.arange(
+        max(-search_range, static_offset - center_radius),
+        min(search_range, static_offset + center_radius) + 0.25,
+        0.5,
+    )
+    coarse = [
+        (*score(float(center), float(drift)), float(center), float(drift))
+        for drift in coarse_drifts
+        for center in coarse_centers
+    ]
+    _, _, best_center, best_drift = max(coarse)
+
+    fine_centers = np.arange(
+        max(-search_range, best_center - 0.5),
+        min(search_range, best_center + 0.5) + 0.025,
+        0.05,
+    )
+    fine_drifts = np.arange(
+        max(-max_total_drift, best_drift - 0.25),
+        min(max_total_drift, best_drift + 0.25) + 0.025,
+        0.05,
+    )
+    candidates = [
+        (*score(float(center), float(drift)), float(center), float(drift))
+        for drift in fine_drifts
+        for center in fine_centers
+    ]
+    best_score, count, best_center, best_drift = max(candidates)
+    start_offset = best_center - best_drift / 2
+    rate = best_drift / duration
+    offset_at_limit = abs(best_center) >= search_range - 0.025
+    drift_at_limit = (
+        max_total_drift > 0
+        and abs(best_drift) >= max_total_drift - 0.025
+    )
+    return (
+        start_offset, rate, best_score, static_score, zero_score, count,
+        offset_at_limit, drift_at_limit,
+    )
+
+
 def stationary_interval_baseline(
     times, motion, reference_speed, *, stationary_tolerance=0.0, min_duration=0.0,
 ):
@@ -155,7 +266,9 @@ def arithmetic_mean_scale(values, target_mean):
     values = np.asarray(values, dtype=float)
     source_mean = float(np.mean(values))
     if source_mean <= 1e-12:
-        return np.full_like(values, float(target_mean)), 0.0
+        if abs(target_mean) <= 1e-12:
+            return values.copy(), 1.0
+        raise ValueError("cannot scale a zero-motion series to a nonzero mean")
     factor = float(target_mean) / source_mean
     return values * factor, factor
 
@@ -171,7 +284,9 @@ def time_mean_scale(times, values, target_mean):
         raise ValueError("time-mean scaling requires increasing timestamps")
     source_mean = float(np.trapezoid(values, times) / duration)
     if source_mean <= 1e-12:
-        return np.full_like(values, float(target_mean)), 0.0
+        if abs(target_mean) <= 1e-12:
+            return values.copy(), 1.0
+        raise ValueError("cannot scale a zero-motion series to a nonzero mean")
     factor = float(target_mean) / source_mean
     return values * factor, factor
 

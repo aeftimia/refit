@@ -24,10 +24,10 @@ try:
 except ImportError as exc:
     raise SystemExit("Install dependencies with: python3 -m pip install opencv-python numpy") from exc
 
-from optical_flow_pipeline import blur_frame, median_flow_magnitude
+from optical_flow_pipeline import median_flow_magnitude
 from speed_estimation import (
-    find_rank_offset, haversine_distance, stationary_interval_baseline,
-    split_fit_timestamp_shift, time_mean_scale,
+    find_rank_affine, find_rank_offset, haversine_distance,
+    stationary_interval_baseline, split_fit_timestamp_shift, time_mean_scale,
 )
 
 from fit_binary import FitBinary
@@ -173,8 +173,8 @@ def optical_motion(
 
         with ThreadPoolExecutor(max_workers=flow_workers) as executor:
             for sample_time, frames in zip(sample_times, decoded):
-                previous = blur_frame(frames[0])
-                gray = blur_frame(frames[1])
+                previous = frames[0]
+                gray = frames[1]
                 t = float(sample_time) + 1 / fps
                 pending.append((t, executor.submit(flow_magnitude, previous, gray)))
                 if len(pending) >= flow_workers * 2:
@@ -212,8 +212,6 @@ def optical_motion(
                     gray = read_frame()
                     if previous is None or gray is None:
                         break
-                    previous = blur_frame(previous)
-                    gray = blur_frame(gray)
                     t = frame_no / sample_fps + 1 / fps
                     pending.append((t, executor.submit(flow_magnitude, previous, gray)))
                     frame_no += 1
@@ -241,15 +239,52 @@ def optical_motion(
     return np.array([x[0] for x in samples]), vals
 
 
-def find_clock_offset(video_start, motion_t, motion_v, gps_t, gps_v, search_range):
-    """Find the static video clock correction with maximum speed-shape correlation."""
+def find_clock_model(
+    video_start, motion_t, motion_v, gps_t, gps_v, search_range, drift_ppm,
+    drift_auto=False,
+):
+    """Find a static or affine video clock correction."""
     # One sample per second is enough for clock alignment and avoids overweighting
     # adjacent, highly autocorrelated optical-flow frames.
     seconds = np.arange(math.ceil(motion_t[0]), math.floor(motion_t[-1]) + 1, dtype=float)
     motion = np.interp(seconds, motion_t, motion_v)
     minimum = max(20, min(60, len(seconds) // 2))
-    return find_rank_offset(
-        video_start.timestamp() + seconds,
+    absolute_times = video_start.timestamp() + seconds
+    if drift_ppm:
+        active_bound = drift_ppm
+        maximum_bound = 2 * search_range / max(seconds[-1] - seconds[0], 1) * 1e6
+        while True:
+            result = find_rank_affine(
+                absolute_times,
+                motion,
+                gps_t,
+                gps_v,
+                search_range,
+                max_drift_ppm=active_bound,
+                minimum_samples=minimum,
+                support_penalty=0.02,
+            )
+            (
+                first_offset, rate, score, static_score, zero_score, count,
+                offset_limit, drift_limit,
+            ) = result
+            if not (drift_auto and drift_limit and active_bound < maximum_bound):
+                break
+            active_bound = min(active_bound * 2, maximum_bound)
+            print(
+                f"Clock-drift optimum reached the rate boundary; "
+                f"expanding search to {active_bound:.0f} ppm",
+                file=sys.stderr,
+            )
+        # The affine primitive anchors its offset at the first sampled second;
+        # production models offset at the actual first video frame.
+        start_offset = first_offset - rate * seconds[0]
+        return (
+            start_offset, rate, score, static_score, zero_score, count,
+            offset_limit, drift_limit, active_bound,
+        )
+    offset, score, zero_score, count, at_limit = find_rank_offset(
+        absolute_times,
         motion,
         gps_t,
         gps_v,
@@ -257,6 +292,7 @@ def find_clock_offset(video_start, motion_t, motion_v, gps_t, gps_v, search_rang
         minimum_samples=minimum,
         support_penalty=0.02,
     )
+    return offset, 0.0, score, score, zero_score, count, at_limit, False, 0.0
 
 
 def fit_track(fit_file):
@@ -329,6 +365,14 @@ def main():
         help="maximum automatic video clock correction in seconds (0 disables)",
     )
     p.add_argument(
+        "--clock-drift-ppm", type=float, default=0.0,
+        help="experimental affine clock-rate search bound in ppm (0 uses static sync)",
+    )
+    p.add_argument(
+        "--clock-drift-auto", action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    p.add_argument(
         "--flow-workers", type=int,
         default=min(4, os.cpu_count() or 1),
         help="parallel optical-flow calculations",
@@ -338,11 +382,22 @@ def main():
         p.error("--flow-workers must be at least 1")
     if args.sync_range < 0:
         p.error("--sync-range cannot be negative")
+    if args.clock_drift_ppm < 0:
+        p.error("--clock-drift-ppm cannot be negative")
+    if args.clock_drift_ppm and not args.sync_range:
+        p.error("--clock-drift-ppm requires a nonzero --sync-range")
+    if args.clock_drift_auto and not args.clock_drift_ppm:
+        p.error("--clock-drift-auto requires --clock-drift-ppm")
 
     metadata = json.loads(args.metadata_json)[0]
     print("Temporal smoothing: disabled")
     video_start, video_end = video_window(metadata, parse_tz(args.default_timezone))
+    original_video_start = video_start
+    original_video_end = video_end
+    video_duration = (video_end - video_start).total_seconds()
     clock_offset = 0.0
+    clock_rate = 0.0
+    affine_applied = False
     fit_file = FitBinary(args.fit)
     track_points, times = fit_track(fit_file)
 
@@ -355,23 +410,59 @@ def main():
         )
     if args.sync_range:
         gps_t, gps_v, raw_gps_v, speed_source = fit_speed_series(fit_file, track_points, times)
-        offset, sync_score, zero_score, sync_samples, at_limit = find_clock_offset(
-            video_start, motion_t, motion_v, gps_t, gps_v, args.sync_range
+        (
+            offset, clock_rate, sync_score, static_score, zero_score, sync_samples,
+            at_limit, drift_at_limit, drift_bound,
+        ) = find_clock_model(
+            original_video_start,
+            motion_t,
+            motion_v,
+            gps_t,
+            gps_v,
+            args.sync_range,
+            args.clock_drift_ppm,
+            args.clock_drift_auto,
         )
         clock_offset = offset
-        video_start += timedelta(seconds=offset)
-        video_end += timedelta(seconds=offset)
-        print(
-            f"Automatic clock correction: {offset:+.2f}s using {speed_source} "
-            f"(rank correlation {sync_score:.3f}, uncorrected {zero_score:.3f}, "
-            f"{sync_samples} samples)"
+        endpoint_drift = clock_rate * video_duration
+        video_start = original_video_start + timedelta(seconds=clock_offset)
+        video_end = original_video_end + timedelta(
+            seconds=clock_offset + endpoint_drift
         )
-        if sync_score < 0.2 or sync_score - zero_score < 0.03:
-            print("Warning: automatic clock alignment has low confidence", file=sys.stderr)
+        if args.clock_drift_ppm:
+            affine_applied = True
+            print(
+                f"Automatic affine clock correction: start {clock_offset:+.2f}s, "
+                f"end {clock_offset + endpoint_drift:+.2f}s "
+                f"({clock_rate * 1_000_000:+.0f} ppm; searched "
+                f"±{drift_bound:.0f} ppm) using {speed_source} "
+                f"(rank correlation affine {sync_score:.3f}, static "
+                f"{static_score:.3f}, uncorrected {zero_score:.3f}, "
+                f"{sync_samples} samples)"
+            )
+        else:
+            print(
+                f"Automatic clock correction: {offset:+.2f}s using {speed_source} "
+                f"(rank correlation {sync_score:.3f}, uncorrected {zero_score:.3f}, "
+                f"{sync_samples} samples)"
+            )
         if at_limit:
-            print("Warning: best clock alignment is at the search limit", file=sys.stderr)
+            raise ValueError(
+                "clock offset is not identified: optimum remains at the "
+                f"±{args.sync_range:g}s search boundary"
+            )
+        if drift_at_limit:
+            raise ValueError(
+                "affine clock rate is not identified: optimum remains at the "
+                f"±{drift_bound:.0f} ppm search boundary"
+            )
         if not args.dry_run:
-            absolute_motion_t = video_start.timestamp() + motion_t
+            absolute_motion_t = (
+                original_video_start.timestamp()
+                + motion_t
+                + clock_offset
+                + clock_rate * motion_t
+            )
             baseline, stop_count, baseline_samples = stationary_interval_baseline(
                 absolute_motion_t,
                 motion_v,
@@ -407,8 +498,18 @@ def main():
 
     # Optical-motion times are relative to the original video, even when the
     # beginning or end of the output is clipped to the FIT range.
-    offsets = np.array([(t - video_start).total_seconds() for t in selected_times])
-    encoded_shift, sampling_phase = split_fit_timestamp_shift(clock_offset)
+    offsets = np.array([
+        (
+            t.timestamp()
+            - original_video_start.timestamp()
+            - clock_offset
+        ) / (1 + clock_rate)
+        for t in selected_times
+    ])
+    if affine_applied:
+        encoded_shift, sampling_phase = 0, 0.0
+    else:
+        encoded_shift, sampling_phase = split_fit_timestamp_shift(clock_offset)
     if args.dry_run:
         print("Dry-run mode: preserving every original FIT message, speed, and position")
         if abs(sampling_phase) > 1e-9:
@@ -425,19 +526,22 @@ def main():
             right=motion_v[-1],
         )
         speeds, scale = time_mean_scale(offsets, relative, avg_speed)
-        if scale == 0.0:
-            print("Warning: no usable optical motion; writing constant average speed", file=sys.stderr)
         for point, speed in zip(selected, speeds):
             fit_file.set_record_speed(point.location, float(speed))
         for message, timestamp, _ in fit_file.gps_metadata_points():
             when = datetime.fromtimestamp(timestamp, timezone.utc)
             if start <= when <= end:
-                relative_time = (when - video_start).total_seconds() + sampling_phase
-                speed = (
-                    avg_speed if scale == 0.0 else scale * np.interp(
-                        relative_time, motion_t, motion_v,
-                        left=motion_v[0], right=motion_v[-1],
-                    )
+                relative_time = (
+                    (
+                        when.timestamp()
+                        - original_video_start.timestamp()
+                        - clock_offset
+                    ) / (1 + clock_rate)
+                    + sampling_phase
+                )
+                speed = scale * np.interp(
+                    relative_time, motion_t, motion_v,
+                    left=motion_v[0], right=motion_v[-1],
                 )
                 fit_file.set_gps_metadata_speed(
                     message, float(speed)
@@ -450,7 +554,15 @@ def main():
 
     # Insta360 aligns FIT records against the uncorrected MP4 clock. Shift all
     # recognized original messages while retaining Garmin-specific payloads.
-    if encoded_shift:
+    if affine_applied:
+        fit_file.warp_timestamps(
+            original_video_start.timestamp(), clock_offset, clock_rate
+        )
+        print(
+            "Warped output FIT timestamps onto the affine MP4 clock "
+            f"({clock_rate * 1_000_000:+.0f} ppm)"
+        )
+    elif encoded_shift:
         fit_file.shift_timestamps(encoded_shift)
         print(f"Shifted output FIT timestamps by {encoded_shift:+d}s for the MP4 clock")
 

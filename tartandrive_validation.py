@@ -21,9 +21,10 @@ import urllib.request
 import cv2
 import numpy as np
 
-from optical_flow_pipeline import blur_frame, median_flow_magnitude
+from optical_flow_pipeline import median_flow_magnitude
 from speed_estimation import (
-    arithmetic_mean_scale, error_summary, stationary_interval_baseline,
+    arithmetic_mean_scale, error_summary, find_rank_affine, find_rank_offset,
+    stationary_interval_baseline,
 )
 
 
@@ -42,6 +43,8 @@ FILES = {
     "info.yaml": "bags/{sequence}/info.yaml",
 }
 WHEEL_NAMES = ("front_left", "front_right", "rear_left", "rear_right")
+ALIGNMENT_SEARCH_SECONDS = 300.0
+ALIGNMENT_DRIFT_PPM = 10_000.0
 
 
 def download_file(url, output):
@@ -115,7 +118,7 @@ def flow_one(item):
     height = max(2, round(a.shape[0] * width / a.shape[1] / 2) * 2)
     a = cv2.resize(a, (width, height))
     b = cv2.resize(b, (width, height))
-    return timestamp, median_flow_magnitude(blur_frame(a), blur_frame(b))
+    return timestamp, median_flow_magnitude(a, b)
 
 
 def optical_series(image_paths, image_t, sample_fps, workers):
@@ -137,6 +140,64 @@ def optical_series(image_paths, image_t, sample_fps, workers):
     flow_t = np.array([value[0] for value in values])
     flow = np.array([value[1] for value in values])
     return flow_t, flow
+
+
+def clock_alignment_validation(grid, optical, dry, wheel_reference):
+    """Test full-sequence optical static/affine alignment against wheel timing."""
+
+    def fit_model(start, end):
+        seconds = np.arange(math.ceil(start), math.floor(end) + 1)
+        motion = np.interp(seconds, grid, optical)
+        reference = np.interp(seconds, grid, dry)
+        minimum = max(20, min(60, len(seconds) // 2))
+        static = find_rank_offset(
+            seconds, motion, seconds, reference, ALIGNMENT_SEARCH_SECONDS,
+            minimum_samples=minimum, support_penalty=0.02,
+        )
+        affine = find_rank_affine(
+            seconds, motion, seconds, reference, ALIGNMENT_SEARCH_SECONDS,
+            max_drift_ppm=ALIGNMENT_DRIFT_PPM,
+            minimum_samples=minimum, support_penalty=0.02,
+        )
+        return seconds[0], static, affine
+
+    def estimates(times, anchor, static, affine):
+        static_speed = np.interp(times + static[0], grid, dry)
+        affine_speed = np.interp(
+            times + affine[0] + affine[1] * (times - anchor), grid, dry,
+        )
+        return {
+            "unaligned": np.interp(times, grid, dry),
+            "static": static_speed,
+            "affine": affine_speed,
+        }
+
+    anchor, static, affine = fit_model(grid[0], grid[-1])
+    all_estimates = estimates(grid, anchor, static, affine)
+    def model_parameters(anchor_time, static_model, affine_model, end_time):
+        return {
+            "static_offset_seconds": static_model[0],
+            "affine_start_offset_seconds": affine_model[0],
+            "affine_end_offset_seconds": (
+                affine_model[0] + affine_model[1] * (end_time - anchor_time)
+            ),
+            "affine_rate_ppm": affine_model[1] * 1_000_000,
+            "static_offset_at_boundary": static_model[4],
+            "affine_offset_at_boundary": affine_model[6],
+            "affine_rate_at_boundary": affine_model[7],
+        }
+
+    return {
+        "search_seconds": ALIGNMENT_SEARCH_SECONDS,
+        "drift_bound_ppm": ALIGNMENT_DRIFT_PPM,
+        "all_data_fit": model_parameters(
+            anchor, static, affine, grid[-1],
+        ),
+        "all_data_wheel_errors": {
+            name: error_summary(values, wheel_reference)
+            for name, values in all_estimates.items()
+        },
+    }
 
 
 def evaluate(raw, images, output, sequence, sample_fps, workers, wheel_diameter_inches):
@@ -197,6 +258,9 @@ def evaluate(raw, images, output, sequence, sample_fps, workers, wheel_diameter_
         "full_vs_mean_normalized_wheel": error_summary(full, wheel_scaled),
         "dry_vs_mean_normalized_rear_pair": error_summary(dry, rear_scaled),
         "full_vs_mean_normalized_rear_pair": error_summary(full, rear_scaled),
+        "clock_alignment_validation": clock_alignment_validation(
+            grid - start, full, dry, rear_scaled,
+        ),
     }
 
     median_rpm = np.median(wheels_rpm, axis=1)
@@ -298,6 +362,23 @@ def write_report(path, metrics):
         "",
         "The per-wheel spread is the observed slip/sensor-health diagnostic. It "
         "does not assume that off-road ATV wheels slip more than mountain-bike wheels.",
+        "",
+        "## Clock-drift sensitivity",
+        "",
+        "The synchronized TartanDrive timestamps provide a no-correction base case. "
+        "The production optical rank objective is used to fit static and affine "
+        "corrections without wheel data, then each corrected GNSS/INS stream is "
+        "compared over the complete sequence with the mean-normalized rear-wheel "
+        "reference.",
+        "",
+    ])
+    clock = metrics["clock_alignment_validation"]
+    errors = clock["all_data_wheel_errors"]
+    lines.extend([
+        "Full-sequence rear-wheel MAE: unaligned "
+        f"{errors['unaligned']['mae_mps']:.3f} m/s; static "
+        f"{errors['static']['mae_mps']:.3f} m/s; affine "
+        f"{errors['affine']['mae_mps']:.3f} m/s.",
         "",
     ])
     path.write_text("\n".join(lines), encoding="utf-8")
