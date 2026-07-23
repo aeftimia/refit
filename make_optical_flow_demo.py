@@ -10,8 +10,7 @@ import cv2
 import numpy as np
 
 from optical_flow_pipeline import (
-    BLUR_KERNEL, calculate_flow, flow_magnitudes, preprocess_frame,
-    roi_bounds,
+    calculate_flow, flow_magnitudes, grayscale_frame, resize_frame, roi_bounds,
 )
 from fit_binary import FitBinary
 from video_speed_fit import parse_tz, video_window
@@ -142,13 +141,12 @@ def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.
         if not ok:
             break
         frame_number += 1
-        _, first_gray, first_blurred = preprocess_frame(first)
-        _, gray, blurred = preprocess_frame(second)
-        flow = calculate_flow(first_blurred, blurred)
+        first_gray = grayscale_frame(resize_frame(first))
+        gray = grayscale_frame(resize_frame(second))
+        flow = calculate_flow(first_gray, gray)
         magnitude = flow_magnitudes(flow)
         observations.append((
-            first_gray, gray, first_blurred, blurred, flow, magnitude,
-            first_frame_number,
+            first_gray, gray, flow, magnitude, first_frame_number,
         ))
     cap.release()
     if not observations:
@@ -156,20 +154,21 @@ def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.
 
     h, w = observations[0][0].shape
     size = (w, h)
-    magnitudes = np.concatenate([x[5].ravel() for x in observations])
+    magnitudes = np.concatenate([item[3].ravel() for item in observations])
     display_ceiling = max(float(np.percentile(magnitudes, 99)), 1e-6)
     paths = {
         "gray": output / "01_grayscale_pair_overlay.mp4",
-        "blur": output / "02_blurred_pair_overlay.mp4",
-        "vectors": output / "03_farneback_flow_vectors.mp4",
-        "magnitude": output / "04_flow_magnitude.mp4",
-        "roi": output / "05_roi_used_for_median.mp4",
+        "vectors": output / "02_farneback_flow_vectors.mp4",
+        "magnitude": output / "03_flow_magnitude.mp4",
+        "roi": output / "04_roi_used_for_median.mp4",
     }
     if baseline is not None:
-        paths["baseline"] = output / "06_baseline_subtracted_magnitude.mp4"
+        paths["baseline"] = output / "05_baseline_subtracted_magnitude.mp4"
     for legacy_name in (
         "01_downscaled_640.mp4",
         "01_downscaled_pair_overlay.mp4",
+        "01_early_roi_context_crop.mp4",
+        "01_grayscale_pair_overlay.mp4",
         "02_grayscale.mp4",
         "02_grayscale_pair_overlay.mp4",
         "03_gaussian_blur_5x5.mp4",
@@ -197,21 +196,16 @@ def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.
     outputs = {name: writer(path, sample_fps, size) for name, path in paths.items()}
 
     x0, y0, x1, y1 = roi_bounds((h, w))
-    for (first_gray, gray, first_blurred, blurred, flow, magnitude,
-         first_frame_number) in observations:
+    for first_gray, gray, flow, magnitude, first_frame_number in observations:
         timestamp = first_frame_number / source_fps
         suffix = f"video {timestamp // 60:02.0f}:{timestamp % 60:05.2f}"
         # Temporal color is a display encoding applied consistently to both
         # production inputs. It is not an array consumed by Farneback.
         gray_pair = temporal_pair_overlay(first_gray, gray)
-        pair_overlay = temporal_pair_overlay(first_blurred, blurred)
         timing = f"magenta=N, green=N+1 (+{1000 / source_fps:.2f} ms)"
         outputs["gray"].write(label(
-            gray_pair, f"1. Both frames grayscale at {w}x{h} | {timing} | {suffix}",
-        ))
-        outputs["blur"].write(label(
-            pair_overlay.copy(),
-            f"2. Both frames Gaussian-blurred {BLUR_KERNEL[0]}x{BLUR_KERNEL[1]} | overlay retained | {suffix}",
+            gray_pair,
+            f"1. Full-frame grayscale inputs, no blur | {timing} | {suffix}",
         ))
 
         normalized = np.clip(magnitude / display_ceiling * 255, 0, 255).astype(np.uint8)
@@ -219,10 +213,10 @@ def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.
         # Turbo spans most hues, so hue choice alone cannot separate every arrow
         # from a colored background. Retain the temporal overlay at lower
         # saturation/value, then outline each arrow adaptively below.
-        pair_gray = cv2.cvtColor(pair_overlay, cv2.COLOR_BGR2GRAY)
+        pair_gray = cv2.cvtColor(gray_pair, cv2.COLOR_BGR2GRAY)
         vector_frame = cv2.addWeighted(
             cv2.cvtColor(pair_gray, cv2.COLOR_GRAY2BGR), .45,
-            pair_overlay, .25,
+            gray_pair, .25,
             0,
         )
         spacing = 32
@@ -245,25 +239,32 @@ def generate_optical_flow_demo(video, output_dir, start, duration, sample_fps=4.
                 )
         outputs["vectors"].write(label(
             vector_frame,
-            f"3. Vectors: direction=arrow, magnitude=Turbo color | {suffix}",
+            f"2. Full-frame Farneback vectors, no blur | {suffix}",
         ))
 
-        outputs["magnitude"].write(label(heatmap.copy(), f"4. Flow magnitude (global 99th-percentile scale) | {suffix}"))
-
+        outputs["magnitude"].write(label(
+            heatmap.copy(),
+            f"3. Full-frame flow magnitude | {suffix}",
+        ))
         roi_frame = (heatmap * .22).astype(np.uint8)
         roi_frame[y0:y1, x0:x1] = heatmap[y0:y1, x0:x1]
         cv2.rectangle(roi_frame, (x0, y0), (x1, y1), (255, 255, 255), 2)
-        outputs["roi"].write(label(roi_frame, f"5. Spatial ROI supplied to median reduction | {suffix}"))
+        outputs["roi"].write(label(
+            roi_frame,
+            f"4. ROI selected only for scalar median reduction | {suffix}",
+        ))
         if baseline is not None:
             corrected = np.maximum(magnitude - baseline, 0.0)
             corrected_normalized = np.clip(corrected / display_ceiling * 255, 0, 255).astype(np.uint8)
             corrected_heatmap = cv2.applyColorMap(corrected_normalized, cv2.COLORMAP_TURBO)
-            corrected_roi = (corrected_heatmap * .22).astype(np.uint8)
-            corrected_roi[y0:y1, x0:x1] = corrected_heatmap[y0:y1, x0:x1]
-            cv2.rectangle(corrected_roi, (x0, y0), (x1, y1), (255, 255, 255), 2)
+            corrected_frame = (corrected_heatmap * .22).astype(np.uint8)
+            corrected_frame[y0:y1, x0:x1] = corrected_heatmap[y0:y1, x0:x1]
+            cv2.rectangle(
+                corrected_frame, (x0, y0), (x1, y1), (255, 255, 255), 2
+            )
             outputs["baseline"].write(label(
-                corrected_roi,
-                f"6. ROI magnitude after subtracting baseline {baseline:.4f} px/frame | {suffix}",
+                corrected_frame,
+                f"5. ROI magnitude after subtracting baseline {baseline:.4f} px/frame | {suffix}",
             ))
 
     for out in outputs.values():

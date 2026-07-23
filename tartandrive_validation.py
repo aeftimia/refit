@@ -21,7 +21,7 @@ import urllib.request
 import cv2
 import numpy as np
 
-from optical_flow_pipeline import blur_frame, median_flow_magnitude
+from optical_flow_pipeline import median_flow_magnitude
 from speed_estimation import (
     arithmetic_mean_scale, error_summary, stationary_interval_baseline,
 )
@@ -115,7 +115,7 @@ def flow_one(item):
     height = max(2, round(a.shape[0] * width / a.shape[1] / 2) * 2)
     a = cv2.resize(a, (width, height))
     b = cv2.resize(b, (width, height))
-    return timestamp, median_flow_magnitude(blur_frame(a), blur_frame(b))
+    return timestamp, median_flow_magnitude(a, b)
 
 
 def optical_series(image_paths, image_t, sample_fps, workers):

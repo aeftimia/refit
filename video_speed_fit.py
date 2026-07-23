@@ -24,7 +24,7 @@ try:
 except ImportError as exc:
     raise SystemExit("Install dependencies with: python3 -m pip install opencv-python numpy") from exc
 
-from optical_flow_pipeline import blur_frame, median_flow_magnitude
+from optical_flow_pipeline import median_flow_magnitude
 from speed_estimation import (
     find_rank_offset, haversine_distance, stationary_interval_baseline,
     split_fit_timestamp_shift, time_mean_scale,
@@ -173,8 +173,8 @@ def optical_motion(
 
         with ThreadPoolExecutor(max_workers=flow_workers) as executor:
             for sample_time, frames in zip(sample_times, decoded):
-                previous = blur_frame(frames[0])
-                gray = blur_frame(frames[1])
+                previous = frames[0]
+                gray = frames[1]
                 t = float(sample_time) + 1 / fps
                 pending.append((t, executor.submit(flow_magnitude, previous, gray)))
                 if len(pending) >= flow_workers * 2:
@@ -212,8 +212,6 @@ def optical_motion(
                     gray = read_frame()
                     if previous is None or gray is None:
                         break
-                    previous = blur_frame(previous)
-                    gray = blur_frame(gray)
                     t = frame_no / sample_fps + 1 / fps
                     pending.append((t, executor.submit(flow_magnitude, previous, gray)))
                     frame_no += 1
@@ -369,7 +367,10 @@ def main():
         if sync_score < 0.2 or sync_score - zero_score < 0.03:
             print("Warning: automatic clock alignment has low confidence", file=sys.stderr)
         if at_limit:
-            print("Warning: best clock alignment is at the search limit", file=sys.stderr)
+            raise ValueError(
+                "clock offset is not identified: optimum remains at the "
+                f"±{args.sync_range:g}s search boundary"
+            )
         if not args.dry_run:
             absolute_motion_t = video_start.timestamp() + motion_t
             baseline, stop_count, baseline_samples = stationary_interval_baseline(
@@ -425,19 +426,15 @@ def main():
             right=motion_v[-1],
         )
         speeds, scale = time_mean_scale(offsets, relative, avg_speed)
-        if scale == 0.0:
-            print("Warning: no usable optical motion; writing constant average speed", file=sys.stderr)
         for point, speed in zip(selected, speeds):
             fit_file.set_record_speed(point.location, float(speed))
         for message, timestamp, _ in fit_file.gps_metadata_points():
             when = datetime.fromtimestamp(timestamp, timezone.utc)
             if start <= when <= end:
                 relative_time = (when - video_start).total_seconds() + sampling_phase
-                speed = (
-                    avg_speed if scale == 0.0 else scale * np.interp(
-                        relative_time, motion_t, motion_v,
-                        left=motion_v[0], right=motion_v[-1],
-                    )
+                speed = scale * np.interp(
+                    relative_time, motion_t, motion_v,
+                    left=motion_v[0], right=motion_v[-1],
                 )
                 fit_file.set_gps_metadata_speed(
                     message, float(speed)

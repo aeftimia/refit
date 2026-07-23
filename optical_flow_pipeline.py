@@ -4,7 +4,6 @@ import cv2
 import numpy as np
 
 FRAME_WIDTH = 640
-BLUR_KERNEL = (5, 5)
 ROI = (.10, .20, .90, .85)  # left, top, right, bottom fractions
 
 
@@ -17,20 +16,16 @@ def grayscale_frame(frame):
     return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
 
-def blur_frame(gray):
-    return cv2.GaussianBlur(gray, BLUR_KERNEL, 0)
-
-
 def preprocess_frame(frame, width=FRAME_WIDTH):
-    """Return every production preprocessing stage for inspection or flow."""
+    """Return the production downscale and grayscale stages."""
     resized = resize_frame(frame, width)
-    gray = grayscale_frame(resized)
-    blurred = blur_frame(gray)
-    return resized, gray, blurred
+    return resized, grayscale_frame(resized)
 
 
 def calculate_flow(previous, current):
-    return cv2.calcOpticalFlowFarneback(previous, current, None, .5, 3, 15, 3, 5, 1.2, 0)
+    return cv2.calcOpticalFlowFarneback(
+        previous, current, None, .5, 3, 15, 3, 5, 1.2, 0
+    )
 
 
 def flow_magnitudes(flow):
@@ -49,5 +44,6 @@ def roi_magnitudes(magnitudes):
 
 
 def median_flow_magnitude(previous, current):
+    """Compute unblurred full-frame flow, then reduce the measurement ROI."""
     flow = calculate_flow(previous, current)
     return float(np.median(roi_magnitudes(flow_magnitudes(flow))))

@@ -12,6 +12,9 @@ The shortest workflow needs only the video. The first run prompts securely for
 Garmin Connect credentials and MFA when required; later runs reuse refreshable
 tokens stored in `~/.garminconnect`. The matching original FIT is cached under
 `~/.cache/refit/garmin`, then passed through the same lossless transformation.
+The launcher automatically uses the repository's `venv/bin/python` when it
+exists, so it works even when another Conda or system Python is active. Set
+`REFIT_PYTHON` to override the interpreter.
 
 ```bash
 bash insta360_video_speed_fit.sh VIDEO.mp4
@@ -40,15 +43,15 @@ integration.
 ## Optical speed pipeline
 
 1. Uniformly sample adjacent video-frame pairs.
-2. Downscale each frame to 640 pixels wide, convert it to grayscale, and apply
-   the shared preprocessing in `optical_flow_pipeline.py`.
-3. Compute dense Farneback optical flow between source frames `N` and `N+1`.
+2. Downscale each frame to 640 pixels wide and convert it to grayscale.
+3. Compute dense Farneback optical flow directly between the unblurred,
+   full-frame grayscale source frames `N` and `N+1`.
    Sampling controls how often one of these adjacent-frame pairs is measured;
    it does not increase the time separating the two frames in a pair. For
    example, 4 Hz analysis of 60 fps video uses approximately `(0, 1)`,
    `(15, 16)`, `(30, 31)`, and so on.
 4. Convert each per-pixel flow vector to magnitude.
-5. Retain the central spatial ROI and reduce it to its median magnitude.
+5. Select the central spatial ROI and reduce it to its median magnitude.
 6. Preserve the resulting scalar motion series without temporal smoothing.
    Spatial median reduction already rejects pixel outliers, while an assumed
    temporal cutoff could erase genuine acceleration and braking.
@@ -69,6 +72,17 @@ integration.
 14. Encode the clock correction in whole-second FIT timestamps and apply any
     fractional remainder to synthetic-speed sampling, preserving subsecond
     video alignment without modifying the source video.
+
+Gaussian blur and padded early cropping were tested on TartanDrive and removed.
+The simplest full-frame, unblurred estimator produced the best wheel-referenced
+MAE and correlation. Early cropping improved isolated flow throughput but
+slightly worsened accuracy, changed the signal during large motion, and had
+little effect on dry-run wall time because video seeking dominates.
+
+The production pipeline fails closed rather than silently substituting another
+method. An offset optimum at the configured search boundary is rejected, and a
+full optical run whose motion series cannot be scaled to the nonzero ride
+average fails instead of emitting fabricated constant-speed records.
 
 The baseline method assumes that the Garmin zero-speed intervals are genuine stops.
 Camera rotation during a stop can raise its median motion, which is why the
@@ -103,22 +117,18 @@ folder under `~/Movies` using the duration and video-time range, for example
 `optical-flow-demo-30s-1032-1102`. Passing a directory explicitly overrides the
 automatic name.
 
-After the source preview, the demonstration starts with both downscaled,
-grayscale Farneback inputs in a temporal overlay: frame `N` contributes magenta,
-frame `N+1` contributes green, and unchanged brightness appears gray. A separate
-downscale-only clip is omitted because this display encoding would make it
-visually redundant with the grayscale stage. Blur changes both encoded inputs,
-and the vector stage retains their blurred overlay as its background while
-coloring every arrow with the same global Turbo magnitude scale used by the
-following heatmap. In the vector stage the overlay is darkened and desaturated,
-while each vector receives a contrasting black or white halo selected from its
-color luminance. That separates the two visual encodings without changing
-magnitude colors. The overlay is explanatory rather than an input: Farneback
-compares the two grayscale frames directly, and an absolute-difference image
-would discard the direction needed to estimate vectors. The optional baseline
-stage remains a spatial magnitude heatmap. The subsequent ROI median and
-temporal speed series are scalar reductions and are intended to be explained
-rather than presented as video transformations.
+After the full-frame source preview, stage 1 shows both downscaled, unblurred
+grayscale inputs. Frame `N` contributes magenta, frame `N+1` contributes green,
+and unchanged brightness appears gray. Full-frame Farneback vectors and
+magnitudes follow. Only after magnitude calculation does the demo identify and
+retain the central ROI used by the scalar median. The vector overlay is darkened
+and desaturated, while each vector receives a contrasting black or white halo
+selected from its Turbo-color luminance. The temporal overlay is explanatory
+rather than an input: Farneback compares the two grayscale frames directly, and
+an absolute-difference image would discard the direction needed to estimate
+vectors. The optional baseline stage remains a spatial magnitude heatmap. The
+subsequent ROI median and temporal speed series are scalar reductions and are
+intended to be explained rather than presented as video transformations.
 
 Every demo also produces `99_all_stages_spliced.mp4`. It divides the processed
 observation frames as evenly as possible among all generated stages and joins

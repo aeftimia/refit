@@ -23,6 +23,12 @@ class ActivityWindow:
     end: datetime
 
 
+def prompt_line(message: str) -> str:
+    """Prompt interactively without contaminating stdout's machine-readable path."""
+    print(message, end="", file=sys.stderr, flush=True)
+    return sys.stdin.readline().strip()
+
+
 def parse_garmin_time(value: str) -> datetime:
     parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
     if parsed.tzinfo is None:
@@ -123,7 +129,7 @@ def connect(token_store: Path):
             "install with: python3 -m pip install -r requirements.txt"
         ) from exc
 
-    prompt_mfa = lambda: input("Garmin MFA code: ").strip()
+    prompt_mfa = lambda: prompt_line("Garmin MFA code: ")
     client = Garmin(prompt_mfa=prompt_mfa)
     try:
         client.login(str(token_store))
@@ -136,7 +142,7 @@ def connect(token_store: Path):
             )
 
     print("Garmin Connect authorization required.", file=sys.stderr)
-    email = input("Garmin email: ").strip()
+    email = prompt_line("Garmin email: ")
     password = getpass.getpass("Garmin password: ")
     if not email or not password:
         raise SystemExit("Garmin email and password are required")

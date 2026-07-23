@@ -155,7 +155,9 @@ def arithmetic_mean_scale(values, target_mean):
     values = np.asarray(values, dtype=float)
     source_mean = float(np.mean(values))
     if source_mean <= 1e-12:
-        return np.full_like(values, float(target_mean)), 0.0
+        if abs(target_mean) <= 1e-12:
+            return values.copy(), 1.0
+        raise ValueError("cannot scale a zero-motion series to a nonzero mean")
     factor = float(target_mean) / source_mean
     return values * factor, factor
 
@@ -171,7 +173,9 @@ def time_mean_scale(times, values, target_mean):
         raise ValueError("time-mean scaling requires increasing timestamps")
     source_mean = float(np.trapezoid(values, times) / duration)
     if source_mean <= 1e-12:
-        return np.full_like(values, float(target_mean)), 0.0
+        if abs(target_mean) <= 1e-12:
+            return values.copy(), 1.0
+        raise ValueError("cannot scale a zero-motion series to a nonzero mean")
     factor = float(target_mean) / source_mean
     return values * factor, factor
 
