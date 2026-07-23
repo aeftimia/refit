@@ -47,7 +47,7 @@ to the project's normal 30 fps frame-pair measurement.
 5. Align the unsynchronized GPS clock to camera motion by rank correlation.
 6. Subtract the quietest stop-interval median only if coordinate-derived GPS
    contains a genuine, nonzero-duration zero-speed interval; otherwise use the
-   production fallback of exactly zero.
+   production definition of exactly zero.
 7. Scale optical motion to the GPS-derived distance over the same interval.
 8. Compare both estimates with wheel velocity at 10 Hz using MAE, RMSE, P95,
    maximum absolute error, bias, and correlations.
@@ -57,8 +57,10 @@ clock offset, baseline, or optical scale.
 
 ## Availability caveat
 
-As of 2026-07-18, the university HTTP/HTTPS file host timed out and the Academic
-Torrents swarm exposed peers but no seed delivered data. The adapter and selective
-downloader are ready, but no numeric result should be claimed until one of those
-public mirrors becomes available. The torrent hash is
+As of 2026-07-23, the official dataset landing page is reachable, but the
+separate `autolab.cmpt.sfu.ca` host serving each required archive still times
+out from this environment. A previous Academic Torrents attempt exposed peers
+but no seed delivered data. The adapter and selective downloader are ready, but
+no numeric result should be claimed until the three inputs are actually
+acquired and the validator completes. The torrent hash is
 `e3d6b8d9e87cab68c7947e800e337e58fc8d8e59`.

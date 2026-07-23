@@ -32,6 +32,12 @@ bash insta360_video_speed_fit.sh --output OUTPUT.fit VIDEO.mp4
 bash insta360_video_speed_fit.sh --full VIDEO.mp4 GARMIN.fit OUTPUT.fit
 ```
 
+The default dry run preserves Garmin speed values. Standard FIT timestamps have
+whole-second resolution, so dry-run synchronization encodes the nearest whole
+second and reports any subsecond residual without altering the speed stream. A
+full run can retain that residual by shifting where its synthetic optical
+speeds are sampled.
+
 Automatic selection searches Garmin activities around the video date and picks
 the activity with the greatest timeline overlap. Use `--activity-id ID` to
 override selection, or `--token-store DIR` to isolate the authorization cache.
@@ -42,7 +48,11 @@ integration.
 
 ## Optical speed pipeline
 
-1. Uniformly sample adjacent video-frame pairs.
+The default dry alignment uses up to 1,000 uniformly spaced adjacent-frame
+pairs across the video. A full optical-speed run instead samples continuously
+at `SAMPLE_FPS` (4 Hz by default).
+
+1. Uniformly sample adjacent video-frame pairs at the selected analysis rate.
 2. Downscale each frame to 640 pixels wide and convert it to grayscale.
 3. Compute dense Farneback optical flow directly between the unblurred,
    full-frame grayscale source frames `N` and `N+1`.
@@ -74,10 +84,17 @@ integration.
     video alignment without modifying the source video.
 
 Gaussian blur and padded early cropping were tested on TartanDrive and removed.
-The simplest full-frame, unblurred estimator produced the best wheel-referenced
-MAE and correlation. Early cropping improved isolated flow throughput but
-slightly worsened accuracy, changed the signal during large motion, and had
-little effect on dry-run wall time because video seeking dominates.
+Among those preprocessing variants, unblurred full-frame flow produced the best
+wheel-referenced MAE and correlation. Early cropping improved isolated flow
+throughput but slightly worsened accuracy, changed the signal during large
+motion, and had little effect on dry-run wall time because video seeking
+dominates.
+
+The later measurement ROI is separate and intentional: no pixels are discarded
+before Farneback flow or magnitude calculation. Only the scalar median uses the
+central region spanning 10%–90% of frame width and 20%–85% of frame height.
+The demonstrations darken pixels outside that region to make the reduction
+visible. Removing this late ROI also worsened the TartanDrive validation.
 
 The production pipeline fails closed rather than silently substituting another
 method. An offset optimum at the configured search boundary is rejected, and a
@@ -132,7 +149,7 @@ intended to be explained rather than presented as video transformations.
 
 Every demo also produces `99_all_stages_spliced.mp4`. It divides the processed
 observation frames as evenly as possible among all generated stages and joins
-their corresponding timeline slices. For six stages across a six-second demo,
+their corresponding timeline slices. For five stages across a five-second demo,
 stage 1 supplies the first second, stage 2 the second, and so on; the video does
 not restart when the displayed processing stage changes. The unprocessed source
 preview remains separate from this stage-only splice.

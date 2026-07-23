@@ -1,7 +1,7 @@
 # TartanDrive 2.0 validation
 
 This experiment evaluates the repository's dense optical-flow speed shape on
-the synchronized TartanDrive 2.0 sequence
+the synchronized [TartanDrive 2.0](https://theairlab.org/TartanDrive2/) sequence
 `2023-11-14-14-24-21_gupta`.
 
 The public sequence provides:

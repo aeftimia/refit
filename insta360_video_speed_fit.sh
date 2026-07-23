@@ -21,7 +21,8 @@ Environment variables:
                    venv/bin/python is preferred when available.
   VIDEO_TIMEZONE   Time zone used when MP4 metadata has no offset (default: UTC).
                    Examples: UTC, America/New_York, +02:00
-  SAMPLE_FPS       Optical-flow samples per second (default: 4)
+  SAMPLE_FPS       Full-run optical-flow samples per second (default: 4).
+                   Dry alignment uses up to 1,000 uniform adjacent-frame pairs.
   FLOW_WORKERS     Parallel optical-flow workers (default: 16)
   SYNC_RANGE       Maximum automatic clock correction in seconds (default: 300;
                    set to 0 to disable automatic alignment)
