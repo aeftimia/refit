@@ -24,7 +24,7 @@ import numpy as np
 
 from optical_flow_pipeline import median_flow_magnitude, resize_frame, grayscale_frame
 from speed_estimation import (
-    arithmetic_mean_scale, error_summary, find_rank_offset, haversine_distances,
+    arithmetic_mean_scale, error_summary, find_linear_offset, haversine_distances,
     stationary_interval_baseline,
 )
 
@@ -227,7 +227,7 @@ def clock_offset(opt_t, optical, gps_t, gps_v, search_range):
     relative = opt_t - opt_t[0]
     grid = np.arange(math.ceil(relative[0]), math.floor(relative[-1]) + 1)
     motion = np.interp(grid, relative, optical)
-    offset, score, _, _, _ = find_rank_offset(
+    offset, score, _, _, _ = find_linear_offset(
         opt_t[0] + grid,
         motion,
         gps_t,
@@ -274,7 +274,7 @@ def evaluate(data_root, output_dir, camera_rate, duration, sync_range):
         "evaluation_start_unix": float(grid[0]),
         "evaluation_end_unix": float(grid[-1]),
         "clock_offset_seconds": offset,
-        "clock_rank_correlation": sync_score,
+        "clock_linear_correlation": sync_score,
         "optical_baseline_px_per_frame": baseline,
         "stationary_runs_used": stop_runs,
         "wheel_mean_mps": float(np.mean(truth)),

@@ -8,8 +8,6 @@ Usage: insta360_video_speed_fit.sh [OPTIONS] VIDEO.mp4 [GARMIN.fit] [OUTPUT.fit]
 Options:
   --dry-run        Explicitly select the default: auto-sync while preserving
                    original Garmin speeds and every FIT message.
-  --full           Replace speeds with a fresh optical-flow estimate after
-                   auto-syncing. This is slower and must be requested explicitly.
   --activity-id ID Download a specific Garmin Connect activity instead of
                    selecting the activity that best overlaps the video.
   --token-store DIR
@@ -29,7 +27,6 @@ Environment variables:
 EOF
 }
 
-full_run=0
 activity_id=
 token_store=${GARMIN_TOKEN_STORE:-~/.garminconnect}
 requested_output=
@@ -37,10 +34,6 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)
       full_run=0
-      shift
-      ;;
-    --full)
-      full_run=1
       shift
       ;;
     --activity-id)
@@ -152,10 +145,6 @@ run_processor() {
     "$@"
 }
 
-if [[ "$full_run" == 1 ]]; then
-  run_processor --full
-else
-  run_processor --dry-run
-fi
+run_processor --dry-run
 
 echo "Wrote $output_fit"

@@ -73,7 +73,21 @@ def rank_correlation(first, second):
     return float(np.corrcoef(first, second)[0, 1])
 
 
-def find_rank_offset(
+def linear_correlation(first, second):
+    """Pearson correlation with a defined flat-series result.
+
+    Unlike rank correlation this retains the depth of optical-motion valleys,
+    which is important when a long, stationary video interval should align
+    with Garmin's exact zero-speed records.
+    """
+    first = np.asarray(first, dtype=float)
+    second = np.asarray(second, dtype=float)
+    if np.std(first) <= 1e-12 or np.std(second) <= 1e-12:
+        return -1.0
+    return float(np.corrcoef(first, second)[0, 1])
+
+
+def find_linear_offset(
     motion_times,
     motion,
     reference_times,
@@ -85,7 +99,7 @@ def find_rank_offset(
     minimum_samples=20,
     support_penalty=0.0,
 ):
-    """Find the static time offset maximizing rank correlation."""
+    """Find the static time offset maximizing linear correlation."""
     motion_times = np.asarray(motion_times, dtype=float)
     motion = np.asarray(motion, dtype=float)
     reference_times = np.asarray(reference_times, dtype=float)
@@ -97,7 +111,7 @@ def find_rank_offset(
         count = int(valid.sum())
         if count < minimum_samples:
             return -2.0, count
-        value = rank_correlation(
+        value = linear_correlation(
             motion[valid], np.interp(query[valid], reference_times, reference)
         )
         value -= support_penalty * (1 - valid.mean())

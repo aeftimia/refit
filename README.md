@@ -4,9 +4,8 @@ This project aligns a video clock with an original Garmin FIT activity and
 writes an Insta360-compatible FIT file. The writer patches fixed-width FIT
 timestamp and speed fields in the original binary and recalculates its CRCs;
 every non-target byte is retained, including Garmin messages, developer fields,
-GPS metadata, heart rate, elevation, events, and device information. By default,
-the command synchronizes timestamps while keeping Garmin speeds. Optical speed
-replacement is slower and requires an explicit `--full` flag.
+GPS metadata, heart rate, elevation, events, and device information. The command
+synchronizes timestamps while retaining Garmin's recorded speed and position.
 
 The shortest workflow needs only the video. The first run prompts securely for
 Garmin Connect credentials and MFA when required; later runs reuse refreshable
@@ -29,14 +28,12 @@ Local files and explicit output paths remain supported:
 ```bash
 bash insta360_video_speed_fit.sh VIDEO.mp4 GARMIN.fit OUTPUT.fit
 bash insta360_video_speed_fit.sh --output OUTPUT.fit VIDEO.mp4
-bash insta360_video_speed_fit.sh --full VIDEO.mp4 GARMIN.fit OUTPUT.fit
 ```
 
-The default dry run preserves Garmin speed values. Standard FIT timestamps have
-whole-second resolution, so dry-run synchronization encodes the nearest whole
-second and reports any subsecond residual without altering the speed stream. A
-full run can retain that residual by shifting where its synthetic optical
-speeds are sampled.
+Standard FIT timestamps have whole-second resolution. The synchronization
+encodes the nearest timestamp shift, then applies any fractional residual by
+interpolating Garmin's denser `gps_metadata` speed stream. Coordinates and
+record-level Garmin speeds remain unchanged.
 
 Automatic selection searches Garmin activities around the video date and picks
 the activity with the greatest timeline overlap. Use `--activity-id ID` to
@@ -48,9 +45,8 @@ integration.
 
 ## Optical speed pipeline
 
-The default dry alignment uses up to 1,000 uniformly spaced adjacent-frame
-pairs across the video. A full optical-speed run instead samples continuously
-at `SAMPLE_FPS` (4 Hz by default).
+Clock alignment uses up to 1,000 uniformly spaced adjacent-frame pairs across
+the video.
 
 1. Uniformly sample adjacent video-frame pairs at the selected analysis rate.
 2. Downscale each frame to 640 pixels wide and convert it to grayscale.
@@ -66,22 +62,13 @@ at `SAMPLE_FPS` (4 Hz by default).
    Spatial median reduction already rejects pixel outliers, while an assumed
    temporal cutoff could erase genuine acceleration and braking.
 7. Align raw optical motion with Garmin's approximately 1 Hz `gps_metadata`
-   speed stream using a static clock-shift search and Spearman rank correlation.
-8. Identify contiguous, nonzero-duration intervals where the aligned FIT reports
-   exactly zero speed.
-9. Calculate the median optical magnitude within each observed stop. Use the
-   lowest interval median as the additive optical baseline. This selects the
-   quietest observed stop without relying on the lowest individual frame.
-10. If no stationary interval exists, use a baseline of exactly zero. The code
-    does not assume the camera is stationary for any fixed fraction of a ride.
-11. Subtract the baseline and clamp negative results to zero.
-12. Scale the corrected optical series so its time integral equals the Garmin
-    coordinate distance over the video/FIT overlap.
-13. Patch both record `enhanced_speed` and the denser Garmin GPS-metadata speed
-    values while preserving every other original FIT field.
-14. Encode the clock correction in whole-second FIT timestamps and apply any
-    fractional remainder to synthetic-speed sampling, preserving subsecond
-    video alignment without modifying the source video.
+   speed stream using a static clock-shift search and linear correlation. This
+   retains the depth of low-motion valleys, so sustained stops can contribute
+   proportionally to timing alignment.
+8. Encode the clock correction in whole-second FIT timestamps. Interpolate the
+   denser Garmin GPS-metadata speeds by the fractional remainder, preserving
+   subsecond video alignment without changing the source video, position, or
+   record-level Garmin speed.
 
 Gaussian blur and padded early cropping were tested on TartanDrive and removed.
 Among those preprocessing variants, unblurred full-frame flow produced the best
@@ -97,18 +84,10 @@ The demonstrations darken pixels outside that region to make the reduction
 visible. Removing this late ROI also worsened the TartanDrive validation.
 
 The production pipeline fails closed rather than silently substituting another
-method. An offset optimum at the configured search boundary is rejected, and a
-full optical run whose motion series cannot be scaled to the nonzero ride
-average fails instead of emitting fabricated constant-speed records.
+method: an offset optimum at the configured search boundary is rejected.
 
-The baseline method assumes that the Garmin zero-speed intervals are genuine stops.
-Camera rotation during a stop can raise its median motion, which is why the
-quietest stop is used. Without an observed stop, the additive baseline is not
-identifiable and no subtraction is performed.
-
-Scalar ranking, clock-offset search, stop-baseline estimation, mean scaling,
-and validation metrics live in `speed_estimation.py` and are shared by the
-production and public-validation pipelines.
+Clock-offset search and validation metrics live in `speed_estimation.py` and
+are shared by the production and public-validation pipelines.
 
 ## Demonstrations
 

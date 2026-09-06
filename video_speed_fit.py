@@ -26,8 +26,7 @@ except ImportError as exc:
 
 from optical_flow_pipeline import median_flow_magnitude
 from speed_estimation import (
-    find_rank_offset, haversine_distance, stationary_interval_baseline,
-    split_fit_timestamp_shift, time_mean_scale,
+    find_linear_offset, haversine_distance, split_fit_timestamp_shift,
 )
 
 from fit_binary import FitBinary
@@ -240,13 +239,13 @@ def optical_motion(
 
 
 def find_clock_offset(video_start, motion_t, motion_v, gps_t, gps_v, search_range):
-    """Find the static video clock correction with maximum speed-shape correlation."""
+    """Find the static video clock correction with maximum linear correlation."""
     # One sample per second is enough for clock alignment and avoids overweighting
     # adjacent, highly autocorrelated optical-flow frames.
     seconds = np.arange(math.ceil(motion_t[0]), math.floor(motion_t[-1]) + 1, dtype=float)
     motion = np.interp(seconds, motion_t, motion_v)
     minimum = max(20, min(60, len(seconds) // 2))
-    return find_rank_offset(
+    return find_linear_offset(
         video_start.timestamp() + seconds,
         motion,
         gps_t,
@@ -313,14 +312,9 @@ def main():
     p.add_argument("--metadata-json", required=True)
     p.add_argument("--default-timezone", default="UTC")
     p.add_argument("--sample-fps", type=float, default=4.0)
-    mode = p.add_mutually_exclusive_group()
-    mode.add_argument(
-        "--dry-run", dest="dry_run", action="store_true", default=True,
-        help="auto-sync while preserving Garmin speeds (default)",
-    )
-    mode.add_argument(
-        "--full", dest="dry_run", action="store_false",
-        help="replace speeds with a fresh optical-flow estimate",
+    p.add_argument(
+        "--dry-run", action="store_true",
+        help="accepted for compatibility; Garmin-preserving sync is always used",
     )
     p.add_argument(
         "--sync-range", type=float, default=300.0,
@@ -345,14 +339,14 @@ def main():
     track_points, times = fit_track(fit_file)
 
     motion_t = motion_v = None
-    if not (args.dry_run and args.sync_range == 0):
-        analysis_fps = min(args.sample_fps, 1.0) if args.dry_run else args.sample_fps
+    if args.sync_range:
+        analysis_fps = min(args.sample_fps, 1.0)
         motion_t, motion_v = optical_motion(
             args.video, analysis_fps, args.flow_workers,
-            parallel_decode=args.dry_run,
+            parallel_decode=True,
         )
     if args.sync_range:
-        gps_t, gps_v, raw_gps_v, speed_source = fit_speed_series(fit_file, track_points, times)
+        gps_t, gps_v, _, speed_source = fit_speed_series(fit_file, track_points, times)
         offset, sync_score, zero_score, sync_samples, at_limit = find_clock_offset(
             video_start, motion_t, motion_v, gps_t, gps_v, args.sync_range
         )
@@ -361,7 +355,7 @@ def main():
         video_end += timedelta(seconds=offset)
         print(
             f"Automatic clock correction: {offset:+.2f}s using {speed_source} "
-            f"(rank correlation {sync_score:.3f}, uncorrected {zero_score:.3f}, "
+            f"(linear correlation {sync_score:.3f}, uncorrected {zero_score:.3f}, "
             f"{sync_samples} samples)"
         )
         if sync_score < 0.2 or sync_score - zero_score < 0.03:
@@ -371,23 +365,6 @@ def main():
                 "clock offset is not identified: optimum remains at the "
                 f"±{args.sync_range:g}s search boundary"
             )
-        if not args.dry_run:
-            absolute_motion_t = video_start.timestamp() + motion_t
-            baseline, stop_count, baseline_samples = stationary_interval_baseline(
-                absolute_motion_t,
-                motion_v,
-                np.interp(absolute_motion_t, gps_t, raw_gps_v),
-                stationary_tolerance=1e-9,
-                min_duration=1.0,
-            )
-            motion_v = np.maximum(motion_v - baseline, 0.0)
-            if stop_count:
-                print(
-                    f"Optical baseline: {baseline:.6f} px/frame from the quietest "
-                    f"of {stop_count} stationary intervals ({baseline_samples} samples)"
-                )
-            else:
-                print("Optical baseline: 0 (no observed stationary interval)")
 
     start, end = intersect_window(video_start, video_end, times[0], times[-1])
     if start != video_start or end != video_end:
@@ -408,42 +385,27 @@ def main():
 
     # Optical-motion times are relative to the original video, even when the
     # beginning or end of the output is clipped to the FIT range.
-    offsets = np.array([(t - video_start).total_seconds() for t in selected_times])
     encoded_shift, sampling_phase = split_fit_timestamp_shift(clock_offset)
-    if args.dry_run:
-        print("Dry-run mode: preserving every original FIT message, speed, and position")
-        if abs(sampling_phase) > 1e-9:
-            print(
-                f"Dry-run subsecond residual: {sampling_phase:+.3f}s is not applied "
-                "because that would alter Garmin speed values"
-            )
-    else:
-        relative = np.interp(
-            offsets + sampling_phase,
-            motion_t,
-            motion_v,
-            left=motion_v[0],
-            right=motion_v[-1],
-        )
-        speeds, scale = time_mean_scale(offsets, relative, avg_speed)
-        for point, speed in zip(selected, speeds):
-            fit_file.set_record_speed(point.location, float(speed))
-        for message, timestamp, _ in fit_file.gps_metadata_points():
+    print("Garmin-preserving mode: retaining every original FIT message and position")
+    if abs(sampling_phase) > 1e-9:
+        metadata_points = fit_file.gps_metadata_points()
+        metadata_times = np.array([timestamp for _, timestamp, _ in metadata_points])
+        metadata_speeds = np.array([speed for _, _, speed in metadata_points])
+        for message, timestamp, _ in metadata_points:
             when = datetime.fromtimestamp(timestamp, timezone.utc)
             if start <= when <= end:
-                relative_time = (when - video_start).total_seconds() + sampling_phase
-                speed = scale * np.interp(
-                    relative_time, motion_t, motion_v,
-                    left=motion_v[0], right=motion_v[-1],
-                )
                 fit_file.set_gps_metadata_speed(
-                    message, float(speed)
+                    message,
+                    float(np.interp(
+                        timestamp + sampling_phase,
+                        metadata_times,
+                        metadata_speeds,
+                    )),
                 )
-        if abs(sampling_phase) > 1e-9:
-            print(
-                f"Applied {sampling_phase:+.3f}s synthetic-speed phase compensation "
-                "for whole-second FIT timestamps"
-            )
+        print(
+            f"Applied {sampling_phase:+.3f}s Garmin-speed phase compensation "
+            "for whole-second FIT timestamps"
+        )
 
     # Insta360 aligns FIT records against the uncorrected MP4 clock. Shift all
     # recognized original messages while retaining Garmin-specific payloads.
