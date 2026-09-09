@@ -77,18 +77,19 @@ correlation; Studio continues to display Garmin's speed scale.
 
 ### Camera geometry
 
-The source video is treated as a rectilinear/pinhole view. For an image width
-$W$ and configured horizontal field of view $\theta_h$, its effective focal
-length in pixels is
+The source video is treated as a rectilinear/pinhole view. ReFit converts the
+configured horizontal FOV into the equivalent focal length in pixels:
 
 $$
-f = \frac{W-1}{2\tan(\theta_h/2)}, \qquad
-\mathbf q(u,v) = \frac{((u-c_x)/f,\,(v-c_y)/f,\,1)}
-{\lVert((u-c_x)/f,\,(v-c_y)/f,\,1)\rVert}.
+f = \frac{W-1}{2\tan(\theta/2)}.
 $$
 
-That is the usual [pinhole projection model](https://docs.opencv.org/doc/doxygen/html/d2/d48/group__d__projection.html),
-written here as pixels mapped to unit viewing rays. The Ace Pro 2 Bike Mode
+Here, $W$ is the frame width in pixels, $\theta$ is the configured horizontal
+FOV in radians, and $f$ is the resulting focal length in pixels. For each
+pixel, the code uses its offset from the frame center and $f$ to form a
+unit-length viewing direction. That is the usual
+[pinhole projection model](https://docs.opencv.org/doc/doxygen/html/d2/d48/group__d__projection.html).
+The Ace Pro 2 Bike Mode
 profile in `camera_profiles.json` uses **120° horizontal FOV**. This is the
 only FOV used by the calculation, and is a working estimate of the *exported,
 stabilized rectilinear video*.
@@ -103,9 +104,11 @@ the raw lens image further ([specification](https://store.insta360.com/hr/produc
 The MP4 does not expose an FOV metadata tag, so calibration of the exported
 image—not the raw-lens marketing number—is the way to replace 120°.
 
-Let $\mathbf w=(\dot u,\dot v)$ be pixel flow and $J(u,v)$ the area
-scaling induced by $\mathbf q$. The scalar used for alignment is the median
-of the discrete surface divergence
+For the next expression, $(u,v)$ means a pixel location, and
+$\mathbf w=(\dot u,\dot v)$ is the optical-flow displacement there (in pixels
+per frame). $J(u,v)$ is the local sphere area represented by one image pixel,
+computed from the FOV conversion above; $S^2$ denotes the unit viewing sphere.
+The scalar used for alignment is the median of the discrete surface divergence
 
 $$
 \mathrm{div}_{S^2}\mathbf w
