@@ -69,8 +69,9 @@ correlation; Studio continues to display Garmin's speed scale.
    on the unblurred full frame.
 3. Interpret the image-coordinate flow on the viewing sphere of a calibrated
    rectilinear camera model, then take its surface divergence.
-4. Take the spatial median in the central measurement region
-   $[10\%,90\%]\times[20\%,85\%]$. There is no temporal smoothing.
+4. Take the spatial median from the fixed measurement ROI. On the normal
+   640×360 analysis frame, this is `flow[72:306, 64:576]`: 512×234 samples.
+   There is no temporal smoothing.
 5. Search only positive offsets from 0 to 45 s, retaining the interior offset
    that maximizes linear correlation with Garmin `gps_metadata` speed. A
    boundary optimum is rejected rather than exported.
@@ -128,7 +129,14 @@ artifacts, and an imperfect FOV calibration can still affect it.
 Gaussian blur and pre-flow cropping were tested and removed. Full-frame,
 unblurred flow was both simpler and more accurate on the included validation;
 the late ROI remains because it is a robust spatial reduction, not a
-preprocessing shortcut.
+preprocessing shortcut. The exact fixed ROI is left/right 10%/90% and top/bottom
+20%/85%; on the standard 640×360 frame those Python end-exclusive bounds are
+`flow[72:306, 64:576]`. Farnebäck flow and spherical divergence are calculated
+on the complete frame *before* this slice is taken. `numpy.gradient` therefore
+uses one-sided differences only at the actual image border (row 0/359 or
+column 0/639), none of which enter the median. Values at the ROI's own edge
+still use their immediate full-frame neighbors; the ROI is not a separate
+numerical domain or a boundary condition.
 
 ## Demos
 
