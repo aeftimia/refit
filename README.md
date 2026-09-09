@@ -126,6 +126,26 @@ expansion. ReFit therefore uses divergence directly as a rotation-resistant
 motion proxy. Depth variation, independently moving objects, stabilization
 artifacts, and an imperfect FOV calibration can still affect it.
 
+### Why turning or nodding has zero ideal divergence
+
+The claim applies to every rigid camera rotation: turning left/right (yaw),
+nodding (pitch), tilting (roll), or spinning continuously. Let $\mathbf q$ be
+one unit viewing direction, $\boldsymbol\omega$ be the camera's rotation axis
+and rate, and $\dot{\mathbf q}$ be that direction's instantaneous movement.
+For a rigid rotation,
+
+$$
+\dot{\mathbf q}=\boldsymbol\omega\times\mathbf q.
+$$
+
+This moves each direction *along* the viewing sphere without changing the area
+of any infinitesimal spherical patch. Thus its surface divergence is zero. The
+pixels and scene features can still move dramatically—especially at the edge
+of a wide FOV—but their direction field does not locally spread apart or crowd
+together after the rectilinear-to-sphere correction. In practice, optical-flow
+error, stabilization warps, nonrigid scenery, and occlusion make the measured
+value only approximately rotation-resistant.
+
 Gaussian blur and pre-flow cropping were tested and removed. Full-frame,
 unblurred flow was both simpler and more accurate on the included validation;
 the late ROI remains because it is a robust spatial reduction, not a
