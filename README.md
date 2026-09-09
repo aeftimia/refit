@@ -102,7 +102,7 @@ scaling induced by $\mathbf q$. The scalar used for alignment is the median
 of the discrete surface divergence
 
 $$
-\operatorname{div}_{S^2}\mathbf w
+\mathrm{div}_{S^2}\mathbf w
 = \frac{1}{J}\left[
   \frac{\partial(J\dot u)}{\partial u} +
   \frac{\partial(J\dot v)}{\partial v}
