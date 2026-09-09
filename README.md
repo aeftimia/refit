@@ -121,12 +121,9 @@ $$
 This compensates for the changing solid angle represented by a pixel away from
 the image center. A rigid rotation induces a divergence-free tangent field on
 the viewing sphere; forward camera translation tends to create outward image
-expansion. The connection is the divergence/curl split behind the
-[Helmholtz–Hodge decomposition](https://people.math.ethz.ch/~struwe/Skripten/NonEvolProb-HS2017.pdf).
-ReFit does **not** perform a Helmholtz decomposition: it uses divergence as a
-principled rotation-resistant motion proxy. Depth variation, independently
-moving objects, stabilization artifacts, and an imperfect FOV calibration can
-still affect it.
+expansion. ReFit therefore uses divergence directly as a rotation-resistant
+motion proxy. Depth variation, independently moving objects, stabilization
+artifacts, and an imperfect FOV calibration can still affect it.
 
 Gaussian blur and pre-flow cropping were tested and removed. Full-frame,
 unblurred flow was both simpler and more accurate on the included validation;
