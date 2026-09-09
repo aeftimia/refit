@@ -89,13 +89,19 @@ $$
 
 That is the usual [pinhole projection model](https://docs.opencv.org/doc/doxygen/html/d2/d48/group__d__projection.html),
 written here as pixels mapped to unit viewing rays. The Ace Pro 2 Bike Mode
-profile lives in `camera_profiles.json`; it currently uses a 120° effective
-horizontal FOV. That is a working estimate for this exported footage, not a
-claim that the camera's raw lens is a 120° rectilinear lens. Insta360 lists a
-157° lens FOV and multiple export FOV/stabilization modes, including High
-stabilization for mountain biking ([specification](https://store.insta360.com/hr/product/ace-pro-2?c=3611&from=homepage),
+profile in `camera_profiles.json` uses **120° horizontal FOV**. This is the
+only FOV used by the calculation, and is a working estimate of the *exported,
+stabilized rectilinear video*.
+
+Insta360's published **157° lens FOV** is diagonal and describes the physical
+lens, not the horizontal FOV of this stabilized export. It must not be inserted
+into `horizontal_fov_degrees`: even if an unmodified 16:9 rectilinear image
+really had a 157° diagonal FOV, that would imply roughly 154° horizontal, not
+157°. Export FOV selection and Bike Mode/High stabilization can crop or warp
+the raw lens image further ([specification](https://store.insta360.com/hr/product/ace-pro-2?c=3611&from=homepage),
 [stabilization guide](https://onlinemanual.insta360.com/acepro2/en-us/faq/functionality/stabilization)).
-Replace the profile with a calibration when one is available.
+The MP4 does not expose an FOV metadata tag, so calibration of the exported
+image—not the raw-lens marketing number—is the way to replace 120°.
 
 Let $\mathbf w=(\dot u,\dot v)$ be pixel flow and $J(u,v)$ the area
 scaling induced by $\mathbf q$. The scalar used for alignment is the median

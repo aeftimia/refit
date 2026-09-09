@@ -3,9 +3,8 @@
     "insta360_ace_pro_2_bike_mode": {
       "projection": "rectilinear",
       "horizontal_fov_degrees": 120.0,
-      "source_lens_diagonal_fov_degrees": 157.0,
       "stabilization": "Bike Mode / High stabilization",
-      "notes": "The 157-degree lens specification is documented by Insta360. The 120-degree horizontal rectilinear working FOV is the user's stated estimate for this Bike Mode footage; replace it with a calibration when available."
+      "notes": "This is the effective horizontal FOV used by the rectilinear output model. It is a working estimate for this Bike Mode footage; replace it with a calibration when available."
     }
   }
 }
