@@ -78,7 +78,7 @@ def choose_activity(
     activities: list[dict],
     video_start: datetime,
     video_end: datetime,
-    max_gap: float = 300.0,
+    max_gap: float = 45.0,
 ) -> ActivityWindow:
     candidates = []
     for activity in activities:
@@ -151,23 +151,22 @@ def connect(token_store: Path):
     return client
 
 
-def video_window(metadata: dict, default_timezone: str) -> tuple[datetime, datetime]:
+def video_window(metadata: dict) -> tuple[datetime, datetime]:
     # Import the production parser so download selection and synchronization
     # interpret QuickTime timestamps identically.
-    from video_speed_fit import parse_tz, video_window as parse_video_window
+    from video_speed_fit import video_window as parse_video_window
 
-    return parse_video_window(metadata, parse_tz(default_timezone))
+    return parse_video_window(metadata)
 
 
 def download_matching_fit(
     metadata: dict,
-    default_timezone: str,
     token_store: Path,
     cache_dir: Path,
     activity_id: str | None = None,
-    max_gap: float = 300.0,
+    max_gap: float = 45.0,
 ) -> Path:
-    start, end = video_window(metadata, default_timezone)
+    start, end = video_window(metadata)
     cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(cache_dir, 0o700)
 
@@ -215,15 +214,13 @@ def download_matching_fit(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--metadata-json", required=True)
-    parser.add_argument("--default-timezone", default="UTC")
     parser.add_argument("--activity-id")
     parser.add_argument("--token-store", default="~/.garminconnect")
     parser.add_argument("--cache-dir", default="~/.cache/refit/garmin")
-    parser.add_argument("--max-gap", type=float, default=300.0)
+    parser.add_argument("--max-gap", type=float, default=45.0)
     args = parser.parse_args()
     path = download_matching_fit(
         json.loads(args.metadata_json)[0],
-        args.default_timezone,
         Path(args.token_store).expanduser(),
         Path(args.cache_dir).expanduser(),
         args.activity_id,

@@ -11,9 +11,7 @@ The shortest workflow needs only the video. The first run prompts securely for
 Garmin Connect credentials and MFA when required; later runs reuse refreshable
 tokens stored in `~/.garminconnect`. The matching original FIT is cached under
 `~/.cache/refit/garmin`, then passed through the same lossless transformation.
-The launcher automatically uses the repository's `venv/bin/python` when it
-exists, so it works even when another Conda or system Python is active. Set
-`REFIT_PYTHON` to override the interpreter.
+The launcher always uses the repository's `venv/bin/python`.
 
 ```bash
 bash insta360_video_speed_fit.sh VIDEO.mp4
@@ -23,12 +21,14 @@ The default output is `<video-basename>_speed.fit` in the directory where the
 command is run. For example, running against `/Volumes/Camera/VID_001.mp4` from
 `~/Downloads` writes `~/Downloads/VID_001_speed.fit`.
 
-Local files and explicit output paths remain supported:
+To use a local Garmin FIT rather than downloading it:
 
 ```bash
-bash insta360_video_speed_fit.sh VIDEO.mp4 GARMIN.fit OUTPUT.fit
-bash insta360_video_speed_fit.sh --output OUTPUT.fit VIDEO.mp4
+bash insta360_video_speed_fit.sh VIDEO.mp4 GARMIN.fit
 ```
+
+The MP4 creation timestamp must include a UTC offset. ReFit refuses to guess
+a timezone when that metadata is incomplete.
 
 Standard FIT timestamps have whole-second resolution. The synchronization
 encodes the nearest timestamp shift, then applies any fractional residual by
@@ -36,9 +36,8 @@ interpolating Garmin's denser `gps_metadata` speed stream. Coordinates and
 record-level Garmin speeds remain unchanged.
 
 Automatic selection searches Garmin activities around the video date and picks
-the activity with the greatest timeline overlap. Use `--activity-id ID` to
-override selection, or `--token-store DIR` to isolate the authorization cache.
-The Garmin Connect downloader uses Garmin's mobile authentication flow through
+the activity with the greatest timeline overlap. The Garmin Connect downloader
+uses Garmin's mobile authentication flow through
 the third-party `garminconnect` package; it is separate from Garmin's official
 Activity API, which requires Developer Program approval for a registered cloud
 integration.
@@ -46,7 +45,9 @@ integration.
 ## Optical speed pipeline
 
 Clock alignment uses up to 1,000 uniformly spaced adjacent-frame pairs across
-the video.
+the video, searching only positive 0–45 second camera-clock corrections. Every
+confirmed correction has been in that direction; an optimum at either boundary
+is rejected rather than exported.
 
 1. Uniformly sample adjacent video-frame pairs at the selected analysis rate.
 2. Downscale each frame to 640 pixels wide and convert it to grayscale.
@@ -56,16 +57,20 @@ the video.
    it does not increase the time separating the two frames in a pair. For
    example, 4 Hz analysis of 60 fps video uses approximately `(0, 1)`,
    `(15, 16)`, `(30, 31)`, and so on.
-4. Convert each per-pixel flow vector to magnitude.
-5. Select the central spatial ROI and reduce it to its median magnitude.
-6. Preserve the resulting scalar motion series without temporal smoothing.
+4. Project the flow onto calibrated camera rays using the Ace Pro 2 Bike Mode
+   profile in `camera_profiles.json`.
+5. Compute spherical surface divergence. Ideal rigid camera rotation is
+   divergence-free in this geometry; forward translation produces expansion.
+6. Select the central spatial ROI and reduce its spherical divergence to a
+   robust median scalar.
+7. Preserve the resulting scalar motion series without temporal smoothing.
    Spatial median reduction already rejects pixel outliers, while an assumed
    temporal cutoff could erase genuine acceleration and braking.
-7. Align raw optical motion with Garmin's approximately 1 Hz `gps_metadata`
+8. Align raw optical motion with Garmin's approximately 1 Hz `gps_metadata`
    speed stream using a static clock-shift search and linear correlation. This
    retains the depth of low-motion valleys, so sustained stops can contribute
    proportionally to timing alignment.
-8. Encode the clock correction in whole-second FIT timestamps. Interpolate the
+9. Encode the clock correction in whole-second FIT timestamps. Interpolate the
    denser Garmin GPS-metadata speeds by the fractional remainder, preserving
    subsecond video alignment without changing the source video, position, or
    record-level Garmin speed.
@@ -84,7 +89,7 @@ The demonstrations darken pixels outside that region to make the reduction
 visible. Removing this late ROI also worsened the TartanDrive validation.
 
 The production pipeline fails closed rather than silently substituting another
-method: an offset optimum at the configured search boundary is rejected.
+method: an offset optimum at either search boundary is rejected.
 
 Clock-offset search and validation metrics live in `speed_estimation.py` and
 are shared by the production and public-validation pipelines.

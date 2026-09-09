@@ -13,7 +13,7 @@ from optical_flow_pipeline import (
     calculate_flow, flow_magnitudes, grayscale_frame, resize_frame, roi_bounds,
 )
 from fit_binary import FitBinary
-from video_speed_fit import parse_tz, video_window
+from video_speed_fit import video_window
 
 
 def writer(path, fps, size, color=True):
@@ -73,7 +73,7 @@ def highest_fit_discrepancy(video, dry_fit, full_fit, duration):
         "-CreateDate", "-MediaCreateDate", "-TrackCreateDate", "-DateTimeOriginal",
         "-TimeZone", "-OffsetTimeOriginal", str(video),
     ]))[0]
-    video_start, _ = video_window(metadata, parse_tz("UTC"))
+    video_start, _ = video_window(metadata)
     dry_t, dry_v = series(dry_fit)
     full_t, full_v = series(full_fit)
     first = max(dry_t[0], full_t[0], video_start.timestamp())

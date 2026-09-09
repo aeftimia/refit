@@ -16,7 +16,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
-from zoneinfo import ZoneInfo
 
 try:
     import cv2
@@ -24,37 +23,35 @@ try:
 except ImportError as exc:
     raise SystemExit("Install dependencies with: python3 -m pip install opencv-python numpy") from exc
 
-from optical_flow_pipeline import median_flow_magnitude
+from optical_flow_pipeline import (
+    calculate_flow, load_camera_profile, roi_values, spherical_divergence,
+)
 from speed_estimation import (
     find_linear_offset, haversine_distance, split_fit_timestamp_shift,
 )
 
 from fit_binary import FitBinary
 
-def parse_tz(value: str):
-    if value.upper() in {"Z", "UTC", "GMT"}:
-        return timezone.utc
-    if re.fullmatch(r"[+-]\d\d:\d\d", value):
-        sign = 1 if value[0] == "+" else -1
-        return timezone(sign * timedelta(hours=int(value[1:3]), minutes=int(value[4:6])))
-    return ZoneInfo(value)
+CAMERA_PROFILE = load_camera_profile("insta360_ace_pro_2_bike_mode")
+HORIZONTAL_FOV_DEGREES = float(CAMERA_PROFILE["horizontal_fov_degrees"])
 
-
-def parse_datetime(value: str, default_tz) -> datetime:
+def parse_datetime(value: str) -> datetime:
     value = value.strip().replace("Z", "+00:00")
     # ExifTool commonly emits YYYY:MM:DD HH:MM:SS, optionally with fractional seconds/offset.
     value = re.sub(r"^(\d{4}):(\d{2}):(\d{2})", r"\1-\2-\3", value)
     dt = datetime.fromisoformat(value)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=default_tz)
+        raise ValueError(
+            "MP4 creation timestamp has no UTC offset; refusing to guess its timezone"
+        )
     return dt.astimezone(timezone.utc)
 
 
-def video_window(metadata: dict, default_tz) -> tuple[datetime, datetime]:
+def video_window(metadata: dict) -> tuple[datetime, datetime]:
     start = None
     for key in ("DateTimeOriginal", "MediaCreateDate", "TrackCreateDate", "CreateDate"):
         if metadata.get(key):
-            start = parse_datetime(str(metadata[key]), default_tz)
+            start = parse_datetime(str(metadata[key]))
             break
     if start is None:
         raise ValueError("No usable creation timestamp in MP4 metadata")
@@ -77,7 +74,11 @@ def intersect_window(video_start, video_end, fit_start, fit_end):
 
 
 def flow_magnitude(previous, gray) -> float:
-    return median_flow_magnitude(previous, gray)
+    """Return robust forward-motion evidence in calibrated ray coordinates."""
+    flow = calculate_flow(previous, gray)
+    return float(np.median(roi_values(spherical_divergence(
+        flow, HORIZONTAL_FOV_DEGREES,
+    ))))
 
 
 def optical_motion(
@@ -145,7 +146,9 @@ def optical_motion(
             command = [
                 "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
                 "-ss", f"{sample_time:.6f}", "-i", video, "-frames:v", "2",
+                "-map", "0:v:0", "-an",
                 "-vf", f"scale={width}:{height},format=gray",
+                "-fps_mode", "passthrough",
                 "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1",
             ]
             result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -238,7 +241,11 @@ def optical_motion(
     return np.array([x[0] for x in samples]), vals
 
 
-def find_clock_offset(video_start, motion_t, motion_v, gps_t, gps_v, search_range):
+AUTO_OFFSET_MIN_SECONDS = 0.0
+AUTO_OFFSET_MAX_SECONDS = 45.0
+
+
+def find_clock_offset(video_start, motion_t, motion_v, gps_t, gps_v):
     """Find the static video clock correction with maximum linear correlation."""
     # One sample per second is enough for clock alignment and avoids overweighting
     # adjacent, highly autocorrelated optical-flow frames.
@@ -250,7 +257,8 @@ def find_clock_offset(video_start, motion_t, motion_v, gps_t, gps_v, search_rang
         motion,
         gps_t,
         gps_v,
-        search_range,
+        AUTO_OFFSET_MAX_SECONDS,
+        minimum_offset=AUTO_OFFSET_MIN_SECONDS,
         minimum_samples=minimum,
         support_penalty=0.02,
     )
@@ -310,45 +318,34 @@ def main():
     p.add_argument("--fit", required=True)
     p.add_argument("--output", required=True)
     p.add_argument("--metadata-json", required=True)
-    p.add_argument("--default-timezone", default="UTC")
-    p.add_argument("--sample-fps", type=float, default=4.0)
     p.add_argument(
-        "--dry-run", action="store_true",
-        help="accepted for compatibility; Garmin-preserving sync is always used",
-    )
-    p.add_argument(
-        "--sync-range", type=float, default=300.0,
-        help="maximum automatic video clock correction in seconds (0 disables)",
-    )
-    p.add_argument(
-        "--flow-workers", type=int,
-        default=min(4, os.cpu_count() or 1),
-        help="parallel optical-flow calculations",
+        "--clock-offset", type=float,
+        help=argparse.SUPPRESS,
     )
     args = p.parse_args()
-    if args.flow_workers < 1:
-        p.error("--flow-workers must be at least 1")
-    if args.sync_range < 0:
-        p.error("--sync-range cannot be negative")
 
     metadata = json.loads(args.metadata_json)[0]
     print("Temporal smoothing: disabled")
-    video_start, video_end = video_window(metadata, parse_tz(args.default_timezone))
+    video_start, video_end = video_window(metadata)
     clock_offset = 0.0
     fit_file = FitBinary(args.fit)
     track_points, times = fit_track(fit_file)
 
     motion_t = motion_v = None
-    if args.sync_range:
-        analysis_fps = min(args.sample_fps, 1.0)
+    if args.clock_offset is None:
         motion_t, motion_v = optical_motion(
-            args.video, analysis_fps, args.flow_workers,
+            args.video, 1.0, min(16, os.cpu_count() or 1),
             parallel_decode=True,
         )
-    if args.sync_range:
+    if args.clock_offset is not None:
+        clock_offset = args.clock_offset
+        video_start += timedelta(seconds=clock_offset)
+        video_end += timedelta(seconds=clock_offset)
+        print(f"Explicit clock correction: {clock_offset:+.2f}s (GPS minus video clock)")
+    else:
         gps_t, gps_v, _, speed_source = fit_speed_series(fit_file, track_points, times)
         offset, sync_score, zero_score, sync_samples, at_limit = find_clock_offset(
-            video_start, motion_t, motion_v, gps_t, gps_v, args.sync_range
+            video_start, motion_t, motion_v, gps_t, gps_v
         )
         clock_offset = offset
         video_start += timedelta(seconds=offset)
@@ -363,7 +360,7 @@ def main():
         if at_limit:
             raise ValueError(
                 "clock offset is not identified: optimum remains at the "
-                f"±{args.sync_range:g}s search boundary"
+                f"{AUTO_OFFSET_MIN_SECONDS:g}–{AUTO_OFFSET_MAX_SECONDS:g}s search boundary"
             )
 
     start, end = intersect_window(video_start, video_end, times[0], times[-1])

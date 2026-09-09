@@ -94,6 +94,7 @@ def find_linear_offset(
     reference,
     search_range,
     *,
+    minimum_offset=None,
     coarse_step=0.5,
     refinement_step=0.05,
     minimum_samples=20,
@@ -117,18 +118,22 @@ def find_linear_offset(
         value -= support_penalty * (1 - valid.mean())
         return value, count
 
-    coarse = np.arange(-search_range, search_range + coarse_step / 2, coarse_step)
+    lower = -search_range if minimum_offset is None else float(minimum_offset)
+    upper = float(search_range)
+    if lower > upper:
+        raise ValueError("minimum_offset cannot exceed search_range")
+    coarse = np.arange(lower, upper + coarse_step / 2, coarse_step)
     coarse_scores = [score(float(offset))[0] for offset in coarse]
     best_coarse = float(coarse[int(np.argmax(coarse_scores))])
     refinement = np.arange(
-        max(-search_range, best_coarse - coarse_step),
-        min(search_range, best_coarse + coarse_step) + refinement_step / 2,
+        max(lower, best_coarse - coarse_step),
+        min(upper, best_coarse + coarse_step) + refinement_step / 2,
         refinement_step,
     )
     candidates = [(*score(float(offset)), float(offset)) for offset in refinement]
     best_score, count, best_offset = max(candidates)
     zero_score, _ = score(0.0)
-    at_limit = abs(best_offset) >= search_range - refinement_step / 2
+    at_limit = best_offset <= lower + refinement_step / 2 or best_offset >= upper - refinement_step / 2
     return best_offset, best_score, zero_score, count, at_limit
 
 
