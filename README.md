@@ -46,13 +46,13 @@ FFmpeg decoding remain predictable.
 The output FIT encodes the nearest whole-second timestamp correction. FIT
 activity timestamps cannot represent fractional seconds, so the remaining phase
 is applied by interpolating the `gps_metadata` speed stream. Thus a correction
-of \(\Delta t\) is represented as
+of $\Delta t$ is represented as
 
-\[
+$$
 \Delta t = k + r, \qquad k \in \mathbb{Z}, \quad -0.5 \le r < 0.5,
-\]
+$$
 
-where \(k\) shifts FIT timestamps and \(r\) shifts only the speed samples used
+where $k$ shifts FIT timestamps and $r$ shifts only the speed samples used
 by Studio. Garmin coordinates and record-level speed fields are untouched.
 
 ## Optical-motion alignment
@@ -70,7 +70,7 @@ correlation; Studio continues to display Garmin's speed scale.
 3. Interpret the image-coordinate flow on the viewing sphere of a calibrated
    rectilinear camera model, then take its surface divergence.
 4. Take the spatial median in the central measurement region
-   \([10\%,90\%]\times[20\%,85\%]\). There is no temporal smoothing.
+   $[10\%,90\%]\times[20\%,85\%]$. There is no temporal smoothing.
 5. Search only positive offsets from 0 to 45 s, retaining the interior offset
    that maximizes linear correlation with Garmin `gps_metadata` speed. A
    boundary optimum is rejected rather than exported.
@@ -78,14 +78,14 @@ correlation; Studio continues to display Garmin's speed scale.
 ### Camera geometry
 
 The source video is treated as a rectilinear/pinhole view. For an image width
-\(W\) and configured horizontal field of view \(\theta_h\), its effective focal
+$W$ and configured horizontal field of view $\theta_h$, its effective focal
 length in pixels is
 
-\[
+$$
 f = \frac{W-1}{2\tan(\theta_h/2)}, \qquad
 \mathbf q(u,v) = \frac{((u-c_x)/f,\,(v-c_y)/f,\,1)}
 {\lVert((u-c_x)/f,\,(v-c_y)/f,\,1)\rVert}.
-\]
+$$
 
 That is the usual [pinhole projection model](https://docs.opencv.org/doc/doxygen/html/d2/d48/group__d__projection.html),
 written here as pixels mapped to unit viewing rays. The Ace Pro 2 Bike Mode
@@ -97,17 +97,17 @@ stabilization for mountain biking ([specification](https://store.insta360.com/hr
 [stabilization guide](https://onlinemanual.insta360.com/acepro2/en-us/faq/functionality/stabilization)).
 Replace the profile with a calibration when one is available.
 
-Let \(\mathbf w=(\dot u,\dot v)\) be pixel flow and \(J(u,v)\) the area
-scaling induced by \(\mathbf q\). The scalar used for alignment is the median
+Let $\mathbf w=(\dot u,\dot v)$ be pixel flow and $J(u,v)$ the area
+scaling induced by $\mathbf q$. The scalar used for alignment is the median
 of the discrete surface divergence
 
-\[
+$$
 \operatorname{div}_{S^2}\mathbf w
 = \frac{1}{J}\left[
   \frac{\partial(J\dot u)}{\partial u} +
   \frac{\partial(J\dot v)}{\partial v}
 \right].
-\]
+$$
 
 This compensates for the changing solid angle represented by a pixel away from
 the image center. A rigid rotation induces a divergence-free tangent field on
