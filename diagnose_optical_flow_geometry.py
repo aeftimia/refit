@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 import cv2
 import numpy as np
 
-from optical_flow_pipeline import calculate_flow, flow_measurements, load_camera_profile
+from refit.optical_flow_pipeline import calculate_flow, flow_measurements, load_camera_profile
 
 
 def observations(video, start, end, sample_fps, horizontal_fov_degrees):

@@ -13,8 +13,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from fit_binary import FitBinary
-from video_speed_fit import video_window
+from refit.fit_binary import FitBinary
+from refit.video_speed_fit import video_window
 
 
 def video_start(video):

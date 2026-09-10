@@ -23,14 +23,14 @@ try:
 except ImportError as exc:
     raise SystemExit("Install dependencies with: python3 -m pip install opencv-python numpy") from exc
 
-from optical_flow_pipeline import (
+from .optical_flow_pipeline import (
     calculate_flow, load_camera_profile, roi_values, spherical_divergence,
 )
-from speed_estimation import (
+from .speed_estimation import (
     find_linear_offset, haversine_distance, split_fit_timestamp_shift,
 )
 
-from fit_binary import FitBinary
+from .fit_binary import FitBinary
 
 CAMERA_PROFILE = load_camera_profile("insta360_ace_pro_2_bike_mode")
 HORIZONTAL_FOV_DEGREES = float(CAMERA_PROFILE["horizontal_fov_degrees"])
@@ -312,33 +312,27 @@ def fit_speed_series(fit_file, records, times):
     return uniform_t, raw_uniform_v.copy(), raw_uniform_v, source
 
 
-def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--video", required=True)
-    p.add_argument("--fit", required=True)
-    p.add_argument("--output", required=True)
-    p.add_argument("--metadata-json", required=True)
-    p.add_argument(
-        "--clock-offset", type=float,
-        help=argparse.SUPPRESS,
-    )
-    args = p.parse_args()
-
-    metadata = json.loads(args.metadata_json)[0]
+def align_video(
+    video: str,
+    fit: str,
+    output: str,
+    metadata: dict,
+    *,
+    clock_offset: float | None = None,
+) -> None:
+    """Align one FIT activity to a video's metadata and write the result."""
     print("Temporal smoothing: disabled")
     video_start, video_end = video_window(metadata)
-    clock_offset = 0.0
-    fit_file = FitBinary(args.fit)
+    fit_file = FitBinary(fit)
     track_points, times = fit_track(fit_file)
 
     motion_t = motion_v = None
-    if args.clock_offset is None:
+    if clock_offset is None:
         motion_t, motion_v = optical_motion(
-            args.video, 1.0, min(16, os.cpu_count() or 1),
+            video, 1.0, min(16, os.cpu_count() or 1),
             parallel_decode=True,
         )
-    if args.clock_offset is not None:
-        clock_offset = args.clock_offset
+    if clock_offset is not None:
         video_start += timedelta(seconds=clock_offset)
         video_end += timedelta(seconds=clock_offset)
         print(f"Explicit clock correction: {clock_offset:+.2f}s (GPS minus video clock)")
@@ -372,7 +366,6 @@ def main():
         )
 
     selected = [point for point, when in zip(track_points, times) if start <= when <= end]
-    selected_times = [when for when in times if start <= when <= end]
     if len(selected) < 2:
         raise ValueError("Video/FIT overlap contains too few position records")
     coords = [(point.position_lat, point.position_long) for point in selected]
@@ -380,8 +373,6 @@ def main():
     duration = (end - start).total_seconds()
     avg_speed = distance / duration
 
-    # Optical-motion times are relative to the original video, even when the
-    # beginning or end of the output is clipped to the FIT range.
     encoded_shift, sampling_phase = split_fit_timestamp_shift(clock_offset)
     print("Garmin-preserving mode: retaining every original FIT message and position")
     if abs(sampling_phase) > 1e-9:
@@ -404,16 +395,35 @@ def main():
             "for whole-second FIT timestamps"
         )
 
-    # Insta360 aligns FIT records against the uncorrected MP4 clock. Shift all
-    # recognized original messages while retaining Garmin-specific payloads.
     if encoded_shift:
         fit_file.shift_timestamps(encoded_shift)
         print(f"Shifted output FIT timestamps by {encoded_shift:+d}s for the MP4 clock")
 
-    fit_file.write(args.output)
+    fit_file.write(output)
     print(f"Video UTC window: {video_start.isoformat()} to {video_end.isoformat()}")
     print(f"Output UTC overlap: {start.isoformat()} to {end.isoformat()}")
     print(f"FIT/video overlap: {distance:.1f} m over {duration:.1f} s; mean {avg_speed:.3f} m/s")
+
+
+def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--video", required=True)
+    p.add_argument("--fit", required=True)
+    p.add_argument("--output", required=True)
+    p.add_argument("--metadata-json", required=True)
+    p.add_argument(
+        "--clock-offset", type=float,
+        help=argparse.SUPPRESS,
+    )
+    args = p.parse_args()
+
+    align_video(
+        args.video,
+        args.fit,
+        args.output,
+        json.loads(args.metadata_json)[0],
+        clock_offset=args.clock_offset,
+    )
 
 
 if __name__ == "__main__":

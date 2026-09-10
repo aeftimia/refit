@@ -9,11 +9,11 @@ import subprocess
 import cv2
 import numpy as np
 
-from optical_flow_pipeline import (
+from refit.optical_flow_pipeline import (
     calculate_flow, flow_magnitudes, grayscale_frame, resize_frame, roi_bounds,
 )
-from fit_binary import FitBinary
-from video_speed_fit import video_window
+from refit.fit_binary import FitBinary
+from refit.video_speed_fit import video_window
 
 
 def writer(path, fps, size, color=True):

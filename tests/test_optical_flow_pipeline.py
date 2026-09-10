@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from optical_flow_pipeline import (
+from refit.optical_flow_pipeline import (
     flow_divergence, flow_measurements, median_flow_magnitude, roi_bounds,
     signed_radial_flow, spherical_divergence, spherical_forward_projection,
     spherical_geometry,

@@ -21,8 +21,8 @@ import urllib.request
 import cv2
 import numpy as np
 
-from optical_flow_pipeline import median_flow_magnitude
-from speed_estimation import (
+from refit.optical_flow_pipeline import median_flow_magnitude
+from refit.speed_estimation import (
     arithmetic_mean_scale, error_summary, stationary_interval_baseline,
 )
 

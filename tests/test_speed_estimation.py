@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from speed_estimation import arithmetic_mean_scale, find_linear_offset, linear_correlation, split_fit_timestamp_shift, time_mean_scale
+from refit.speed_estimation import arithmetic_mean_scale, find_linear_offset, linear_correlation, split_fit_timestamp_shift, time_mean_scale
 
 
 class MeanScalingTests(unittest.TestCase):

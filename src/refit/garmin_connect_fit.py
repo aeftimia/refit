@@ -154,7 +154,7 @@ def connect(token_store: Path):
 def video_window(metadata: dict) -> tuple[datetime, datetime]:
     # Import the production parser so download selection and synchronization
     # interpret QuickTime timestamps identically.
-    from video_speed_fit import video_window as parse_video_window
+    from .video_speed_fit import video_window as parse_video_window
 
     return parse_video_window(metadata)
 

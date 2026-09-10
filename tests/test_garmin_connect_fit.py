@@ -6,7 +6,7 @@ from contextlib import redirect_stderr
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from garmin_connect_fit import choose_activity, extract_fit, prompt_line
+from refit.garmin_connect_fit import choose_activity, extract_fit, prompt_line
 
 
 def fake_fit(size=20):

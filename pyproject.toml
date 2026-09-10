@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "refit-video"
+version = "0.1.0"
+description = "Align Garmin FIT telemetry to action-camera video"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fit-tool>=0.9.15",
+  "garminconnect>=0.3.6",
+  "numpy>=1.24",
+  "opencv-python>=4.8",
+]
+
+[project.scripts]
+refit = "refit.cli:main"
+refit-align = "refit.video_speed_fit:main"
+refit-garmin = "refit.garmin_connect_fit:main"
+refit-highlights = "refit.highlight_cli:main"
+refit-render-highlights = "refit.highlight_render:main"
+refit-highlight-experiment = "refit.highlight_experiment:main"
+
+[tool.setuptools.package-data]
+refit = ["camera_profiles.json"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

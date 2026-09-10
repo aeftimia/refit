@@ -11,11 +11,21 @@ messages, developer fields, positions, elevation, heart rate, events, and
 device information. Only FIT timestamps and the `gps_metadata` speed samples
 used by Studio are changed; checksums are recomputed.
 
+## Install
+
+ReFit is a Python package with a `refit` command. It also requires `ffmpeg`
+and `exiftool` on `PATH`.
+
+```bash
+python3 -m venv venv
+venv/bin/python -m pip install -e .
+```
+
 ## Use
 
 ```bash
 cd ~/Downloads
-bash /path/to/refit/insta360_video_speed_fit.sh VIDEO.mp4
+/path/to/refit/venv/bin/refit VIDEO.mp4
 ```
 
 The command downloads the matching Garmin FIT when none is provided, then
@@ -24,8 +34,12 @@ Garmin Connect credentials and MFA; reusable authentication is stored locally.
 To supply an already downloaded activity:
 
 ```bash
-bash /path/to/refit/insta360_video_speed_fit.sh VIDEO.mp4 ACTIVITY.fit
+/path/to/refit/venv/bin/refit VIDEO.mp4 ACTIVITY.fit
 ```
+
+Use `--output PATH` to override the default `<video-stem>_speed.fit` output.
+The existing `insta360_video_speed_fit.sh` wrapper remains available for
+compatibility with source-checkout workflows.
 
 The video creation timestamp must include a UTC offset. ReFit intentionally
 refuses ambiguous camera time rather than inventing a timezone.
@@ -196,3 +210,37 @@ See [TartanDrive details](TARTANDRIVE_VALIDATION.md) and
 [SFU Mountain details](SFU_MOUNTAIN_VALIDATION.md). Those results evaluate the
 timing/motion proxy under their stated sensor assumptions; they do not turn
 monocular optical flow into independently calibrated ground-truth speed.
+
+## Experimental highlight scoring
+
+`refit-highlights` compares three physically grounded rankings using aligned
+`<video-stem>_speed.fit` sidecars. Both outputs share the same motion analysis,
+candidate windows, overlap removal, and duration budget. One ranks the absolute
+bivector part `|velocity ∧ acceleration|`; the other ranks the full geometric
+product norm `|velocity acceleration|`. The third is the unit-velocity wedge
+`|(velocity / |velocity|) ∧ acceleration|`, which is lateral acceleration.
+
+```bash
+refit-highlights /Volumes/Untitled/DCIM/Camera01 \
+  --fit-dir ~/Downloads \
+  --recent-days 5 \
+  --duration 10m \
+  --order chronological \
+  --output-prefix ~/Downloads/highlights
+```
+
+This writes `highlights_lateral.json`, `highlights_bivector.json`, and
+`highlights_total.json`. Each clip
+also records both geometric components, making the selections directly
+comparable. Velocity smoothing defaults to one second; at the current 1 Hz
+analysis rate this preserves the original samples.
+
+Render a manifest at its original resolution and frame rate:
+
+```bash
+refit-render-highlights highlights_bivector.json bivector.mp4 --encoder copy
+refit-render-highlights highlights_total.json total.mp4 --encoder copy
+```
+
+Stream-copy rendering retains the source resolution, frame rate, codec, audio,
+and encoded pixels. Clip boundaries land on nearby source keyframes.
