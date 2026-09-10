@@ -269,11 +269,14 @@ def select_highlights(
     target_duration: float,
     mode: ScoreMode = DEFAULT_SCORE_MODE,
     clip_duration: float = 10.0,
+    max_clips_per_source: int | None = None,
     order: Literal["chronological", "interesting"] = "chronological",
 ) -> list[HighlightClip]:
     """Select the strongest non-overlapping windows up to a duration budget."""
     if target_duration <= 0 or clip_duration <= 0:
         raise ValueError("highlight and clip durations must be positive")
+    if max_clips_per_source is not None and max_clips_per_source <= 0:
+        raise ValueError("max clips per source must be positive")
     chosen: list[HighlightClip] = []
 
     def add_best_windows(duration: float, limit: int) -> None:
@@ -285,6 +288,10 @@ def select_highlights(
         candidates.sort(key=lambda candidate: candidate.score, reverse=True)
         added = 0
         for candidate in candidates:
+            if max_clips_per_source is not None and sum(
+                existing.source == candidate.source for existing in chosen
+            ) >= max_clips_per_source:
+                continue
             if any(_overlaps(candidate, existing) for existing in chosen):
                 continue
             chosen.append(candidate)
@@ -315,6 +322,7 @@ def compare_highlight_modes(
     *,
     target_duration: float,
     clip_duration: float = 10.0,
+    max_clips_per_source: int | None = None,
     order: Literal["chronological", "interesting"] = "chronological",
 ) -> dict[ScoreMode, list[HighlightClip]]:
     """Run both rankings through exactly the same selection machinery."""
@@ -324,6 +332,7 @@ def compare_highlight_modes(
             mode=mode,
             target_duration=target_duration,
             clip_duration=clip_duration,
+            max_clips_per_source=max_clips_per_source,
             order=order,
         )
         for mode in ("lateral", "bivector", "total")
@@ -335,6 +344,7 @@ def comparison_manifests(
     *,
     target_duration: float,
     clip_duration: float = 10.0,
+    max_clips_per_source: int | None = None,
     order: Literal["chronological", "interesting"] = "chronological",
 ) -> dict[ScoreMode, dict]:
     """Return comparable JSON-ready manifests from one geometric analysis."""
@@ -342,6 +352,7 @@ def comparison_manifests(
         timelines,
         target_duration=target_duration,
         clip_duration=clip_duration,
+        max_clips_per_source=max_clips_per_source,
         order=order,
     )
     descriptions = {
@@ -356,6 +367,7 @@ def comparison_manifests(
             "target_duration_seconds": float(target_duration),
             "selected_duration_seconds": sum(clip.duration for clip in clips),
             "clip_duration_seconds": float(clip_duration),
+            "max_clips_per_source": max_clips_per_source,
             "order": order,
             "clips": [clip.as_dict() for clip in clips],
         }
@@ -369,6 +381,7 @@ def write_comparison_manifests(
     *,
     target_duration: float,
     clip_duration: float = 10.0,
+    max_clips_per_source: int | None = None,
     order: Literal["chronological", "interesting"] = "chronological",
 ) -> dict[ScoreMode, Path]:
     """Write sibling ``_bivector.json`` and ``_total.json`` manifests."""
@@ -378,6 +391,7 @@ def write_comparison_manifests(
         timelines,
         target_duration=target_duration,
         clip_duration=clip_duration,
+        max_clips_per_source=max_clips_per_source,
         order=order,
     )
     outputs = {}

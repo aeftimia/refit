@@ -10,6 +10,7 @@ from refit.highlights import (
     compare_highlight_modes,
     geometric_motion,
     geometric_motion_from_gps,
+    select_highlights,
     write_comparison_manifests,
 )
 from refit.highlight_cli import aligned_fit_path, discover_videos
@@ -159,6 +160,21 @@ class HighlightComparisonTests(unittest.TestCase):
             self.assertEqual(
                 discover_videos([root], None), [(root / "ride.mp4").resolve()]
             )
+
+    def test_selection_caps_clips_per_source(self):
+        times = np.arange(101.0)
+        velocity = np.column_stack((times, np.zeros_like(times)))
+        timelines = [
+            MotionTimeline(name, geometric_motion(times, velocity))
+            for name in ("first.mp4", "second.mp4")
+        ]
+        clips = select_highlights(
+            timelines, target_duration=40, clip_duration=10,
+            max_clips_per_source=2, order="interesting",
+        )
+        self.assertEqual(len(clips), 4)
+        for source in ("first.mp4", "second.mp4"):
+            self.assertEqual(sum(clip.source == source for clip in clips), 2)
 
     def test_exported_video_matches_sidecar_by_recording_time(self):
         metadata = {

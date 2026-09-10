@@ -225,6 +225,7 @@ refit-highlights /Volumes/Untitled/DCIM/Camera01 \
   --fit-dir ~/Downloads \
   --recent-days 5 \
   --duration 10m \
+  --max-clips-per-source 2 \
   --order chronological \
   --output-prefix ~/Downloads/highlights
 ```
@@ -234,6 +235,9 @@ This writes `highlights_lateral.json`, `highlights_bivector.json`, and
 also records both geometric components, making the selections directly
 comparable. The recorded speed samples are interpolated directly without a
 separate smoothing pass.
+
+`--max-clips-per-source` limits how many selected windows may come from any
+single input video while continuing down the global interest ranking.
 
 Track geometry is interpolated as a cubic planar path over cumulative GPS
 distance. Its analytic first and second derivatives provide tangent and signed

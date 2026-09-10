@@ -30,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timezone", default="America/New_York")
     parser.add_argument("--duration", type=duration_seconds, required=True)
     parser.add_argument("--clip-duration", type=duration_seconds, default=10.0)
+    parser.add_argument("--max-clips-per-source", type=int)
     parser.add_argument(
         "--order", choices=("chronological", "interesting"), default="interesting",
     )
@@ -56,6 +57,7 @@ def run(args: argparse.Namespace) -> dict:
         timelines,
         target_duration=args.duration,
         clip_duration=args.clip_duration,
+        max_clips_per_source=args.max_clips_per_source,
         order=args.order,
     )
     exports = {}
