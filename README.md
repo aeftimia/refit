@@ -225,6 +225,15 @@ An exported video's FIT file may be named `<video-stem>_speed.fit`. When names
 differ, ReFit also matches files such as `VID_YYYYMMDD_HHMMSS_*_speed.fit` to the
 recording timestamp embedded in the video metadata.
 
+Highlight scoring uses Garmin's speed magnitude from the **already-aligned**
+sidecar; it does not estimate speed from successive GPS positions. ReFit encodes
+the video/FIT clock correction by shifting FIT timestamps to the nearest whole
+second and resampling the Garmin `gps_metadata` speed stream for the remaining
+fractional phase. The highlight pipeline combines that aligned Garmin speed with
+the tangent and curvature of the interpolated GPS path. Consequently, renaming
+an unprocessed FIT file to `_speed.fit` does not align it—create the sidecar with
+`refit` or `batch_refit_recent.sh` first.
+
 ```bash
 refit-highlights /Volumes/Untitled/DCIM/Camera01 \
   --fit-dir ~/Downloads \
@@ -239,8 +248,8 @@ refit-highlights /Volumes/Untitled/DCIM/Camera01 \
 This writes `highlights_lateral.json`, `highlights_bivector.json`, and
 `highlights_total.json`. Each clip
 also records both geometric components, making the selections directly
-comparable. The recorded speed samples are interpolated directly without a
-separate smoothing pass.
+comparable. The aligned Garmin speed samples are interpolated directly without
+a separate smoothing pass.
 
 `--max-clips-per-source` limits how many selected windows may come from any
 single input video while continuing down the global interest ranking.
