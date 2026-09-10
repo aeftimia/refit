@@ -214,19 +214,25 @@ monocular optical flow into independently calibrated ground-truth speed.
 ## Experimental highlight scoring
 
 `refit-highlights` compares three physically grounded rankings using aligned
-`<video-stem>_speed.fit` sidecars. Both outputs share the same motion analysis,
-candidate windows, overlap removal, and duration budget. One ranks the absolute
-bivector part `|velocity ∧ acceleration|`; the other ranks the full geometric
-product norm `|velocity acceleration|`. The third is the unit-velocity wedge
-`|(velocity / |velocity|) ∧ acceleration|`, which is lateral acceleration.
+FIT sidecars. All outputs share the same motion analysis, candidate windows,
+overlap removal, and duration budget:
+
+- `total` (the default score): `|velocity acceleration| = |velocity||acceleration|`
+- `bivector`: `|velocity ∧ acceleration|`
+- `lateral`: `|(velocity / |velocity|) ∧ acceleration|`, or lateral acceleration
+
+An exported video's FIT file may be named `<video-stem>_speed.fit`. When names
+differ, ReFit also matches files such as `VID_YYYYMMDD_HHMMSS_*_speed.fit` to the
+recording timestamp embedded in the video metadata.
 
 ```bash
 refit-highlights /Volumes/Untitled/DCIM/Camera01 \
   --fit-dir ~/Downloads \
   --recent-days 5 \
   --duration 10m \
+  --clip-duration 20s \
   --max-clips-per-source 2 \
-  --order chronological \
+  --order interesting \
   --output-prefix ~/Downloads/highlights
 ```
 
@@ -238,6 +244,25 @@ separate smoothing pass.
 
 `--max-clips-per-source` limits how many selected windows may come from any
 single input video while continuing down the global interest ranking.
+Candidate windows from the same video never overlap. `--order interesting`
+places the strongest selected clip first; `--order chronological` preserves
+source and recording order instead.
+
+Sources can be individual files, directories, or a mixture. Passing explicit
+files is the simplest way to keep only one recording per trail:
+
+```bash
+refit-highlights \
+  "/path/to/albatross 3.mp4" \
+  "/path/to/boundary line 2.mp4" \
+  "/path/to/super steep 2.mp4" \
+  --fit-dir ~/Downloads \
+  --duration 2m \
+  --clip-duration 20s \
+  --max-clips-per-source 2 \
+  --order interesting \
+  --output-prefix ~/Downloads/trail-highlights
+```
 
 Track geometry is interpolated as a cubic planar path over cumulative GPS
 distance. Its analytic first and second derivatives provide tangent and signed
@@ -255,3 +280,10 @@ refit-render-highlights highlights_total.json total.mp4 --encoder copy
 
 Stream-copy rendering retains the source resolution, frame rate, codec, audio,
 and encoded pixels. Clip boundaries land on nearby source keyframes.
+
+For faster test exports, choose an encoder and output height instead:
+
+```bash
+refit-render-highlights highlights_total.json preview.mp4 \
+  --encoder libx264 --height 720
+```
