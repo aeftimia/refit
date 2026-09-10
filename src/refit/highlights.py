@@ -12,6 +12,7 @@ import numpy as np
 from .speed_estimation import EARTH_RADIUS_METRES
 
 ScoreMode = Literal["lateral", "bivector", "total"]
+DEFAULT_SCORE_MODE: ScoreMode = "total"
 
 
 @dataclass(frozen=True)
@@ -26,7 +27,7 @@ class GeometricMotion:
     lateral: np.ndarray
     total: np.ndarray
 
-    def score(self, mode: ScoreMode) -> np.ndarray:
+    def score(self, mode: ScoreMode = DEFAULT_SCORE_MODE) -> np.ndarray:
         if mode == "lateral":
             return self.lateral
         if mode == "bivector":
@@ -231,8 +232,8 @@ def _overlaps(first: HighlightClip, second: HighlightClip) -> bool:
 def select_highlights(
     timelines: Sequence[MotionTimeline],
     *,
-    mode: ScoreMode,
     target_duration: float,
+    mode: ScoreMode = DEFAULT_SCORE_MODE,
     clip_duration: float = 10.0,
     order: Literal["chronological", "interesting"] = "chronological",
 ) -> list[HighlightClip]:

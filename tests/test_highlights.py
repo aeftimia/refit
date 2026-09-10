@@ -41,6 +41,7 @@ class GeometricMotionTests(unittest.TestCase):
             motion.total[1:-1],
             np.hypot(motion.scalar[1:-1], motion.bivector[1:-1]),
         )
+        np.testing.assert_array_equal(motion.score(), motion.total)
 
     def test_gps_track_uses_recorded_speed_magnitude(self):
         times = np.arange(5.0)
@@ -109,6 +110,24 @@ class HighlightComparisonTests(unittest.TestCase):
         )
         for clips in result.values():
             self.assertAlmostEqual(sum(clip.duration for clip in clips), 12)
+
+    def test_selection_never_overlaps_clips_from_the_same_video(self):
+        times = np.arange(100.0)
+        velocity = np.column_stack((10 + np.sin(times), np.cos(times / 3)))
+        result = compare_highlight_modes(
+            [MotionTimeline(
+                "ride.mp4",
+                geometric_motion(times, velocity, smoothing_seconds=0),
+            )],
+            target_duration=50,
+            clip_duration=10,
+        )
+        for clips in result.values():
+            chronological = sorted(clips, key=lambda clip: clip.start)
+            self.assertTrue(all(
+                first.end <= second.start
+                for first, second in zip(chronological, chronological[1:])
+            ))
 
     def test_video_discovery_ignores_macos_resource_forks(self):
         with tempfile.TemporaryDirectory() as directory:
