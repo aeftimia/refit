@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Literal, Sequence
 
 import numpy as np
+from scipy.integrate import cumulative_trapezoid
+from scipy.interpolate import CubicSpline, PchipInterpolator
 
 from .speed_estimation import EARTH_RADIUS_METRES
 
@@ -20,6 +22,7 @@ class GeometricMotion:
     """The scalar and bivector parts of velocity times acceleration."""
 
     times: np.ndarray
+    distance: np.ndarray
     velocity: np.ndarray
     acceleration: np.ndarray
     scalar: np.ndarray
@@ -135,8 +138,9 @@ def geometric_motion(
         out=np.zeros_like(bivector), where=speed > 1e-9,
     )
     total = np.hypot(scalar, bivector)
+    distance = cumulative_trapezoid(speed, times, initial=0)
     return GeometricMotion(
-        times, velocity, acceleration, scalar, bivector, lateral, total,
+        times, distance, velocity, acceleration, scalar, bivector, lateral, total,
     )
 
 
@@ -146,14 +150,11 @@ def geometric_motion_from_gps(
     longitude,
     *,
     speed=None,
+    speed_times=None,
+    sample_times=None,
     smoothing_seconds: float = 1.0,
 ) -> GeometricMotion:
-    """Construct planar velocity vectors from a geographic track.
-
-    GPS positions provide the travel direction.  When a recorded scalar speed
-    is supplied, it provides the magnitude because it is normally less noisy
-    than differentiating positions at approximately 1 Hz.
-    """
+    """Derive motion analytically from a distance-parameterized GPS path."""
     times = np.asarray(times, dtype=float)
     latitude = np.asarray(latitude, dtype=float)
     longitude = np.asarray(longitude, dtype=float)
@@ -169,25 +170,87 @@ def geometric_motion_from_gps(
     )
     north = EARTH_RADIUS_METRES * (latitude_radians - latitude_radians[0])
     position = np.column_stack((east, north))
-    position_velocity = np.gradient(position, times, axis=0)
+    segment_distance = np.linalg.norm(np.diff(position, axis=0), axis=1)
+    path_distance = np.r_[0.0, np.cumsum(segment_distance)]
+    distinct = np.r_[True, np.diff(path_distance) > 1e-6]
+    if distinct.sum() < 3:
+        raise ValueError("GPS track must contain at least three distinct positions")
+    path_distance = path_distance[distinct]
+    position = position[distinct]
+    position_times = times[distinct]
+
+    east_spline = CubicSpline(path_distance, position[:, 0], bc_type="natural")
+    north_spline = CubicSpline(path_distance, position[:, 1], bc_type="natural")
+    distance_at_time = PchipInterpolator(position_times, path_distance)
 
     if speed is None:
-        velocity = position_velocity
+        speed_times = position_times
+        speed_values = np.maximum(distance_at_time.derivative()(speed_times), 0)
     else:
-        speed = np.asarray(speed, dtype=float)
-        if speed.shape != times.shape:
-            raise ValueError("speed must have the same shape as GPS times")
-        valid = np.isfinite(speed)
+        speed_values = np.asarray(speed, dtype=float)
+        speed_times = times if speed_times is None else np.asarray(speed_times, dtype=float)
+        if speed_values.shape != speed_times.shape:
+            raise ValueError("speed and speed_times must have the same shape")
+        valid = np.isfinite(speed_values)
         if valid.sum() < 2:
             raise ValueError("speed must contain at least two finite samples")
-        speed = np.interp(times, times[valid], speed[valid])
-        magnitude = np.linalg.norm(position_velocity, axis=1)
-        direction = np.zeros_like(position_velocity)
-        moving = magnitude > 1e-6
-        direction[moving] = position_velocity[moving] / magnitude[moving, None]
-        velocity = direction * np.maximum(speed, 0)[:, None]
-    return geometric_motion(
-        times, velocity, smoothing_seconds=smoothing_seconds,
+        speed_times = speed_times[valid]
+        speed_values = np.maximum(speed_values[valid], 0)
+    median_step = float(np.median(np.diff(speed_times)))
+    window_samples = max(1, round(float(smoothing_seconds) / median_step))
+    speed_values = smooth_vectors(speed_values[:, None], window_samples)[:, 0]
+    speed_at_time = PchipInterpolator(speed_times, speed_values)
+
+    if sample_times is None:
+        lower = max(position_times[0], speed_times[0])
+        upper = min(position_times[-1], speed_times[-1])
+        sample_times = np.arange(lower, upper + 0.05, 0.1)
+    else:
+        sample_times = np.asarray(sample_times, dtype=float)
+    if len(sample_times) < 3 or np.any(np.diff(sample_times) <= 0):
+        raise ValueError("sample_times must contain at least three increasing values")
+
+    distance = np.clip(
+        distance_at_time(sample_times), path_distance[0], path_distance[-1]
+    )
+    first = np.column_stack((
+        east_spline(distance, 1), north_spline(distance, 1),
+    ))
+    second = np.column_stack((
+        east_spline(distance, 2), north_spline(distance, 2),
+    ))
+    first_norm = np.linalg.norm(first, axis=1)
+    tangent = np.divide(
+        first, first_norm[:, None],
+        out=np.zeros_like(first), where=first_norm[:, None] > 1e-12,
+    )
+    normal = np.column_stack((-tangent[:, 1], tangent[:, 0]))
+    curvature = np.divide(
+        first[:, 0] * second[:, 1] - first[:, 1] * second[:, 0],
+        first_norm ** 3,
+        out=np.zeros_like(first_norm), where=first_norm > 1e-12,
+    )
+    sampled_speed = np.maximum(speed_at_time(sample_times), 0)
+    longitudinal_acceleration = speed_at_time.derivative()(sample_times)
+    lateral_acceleration = sampled_speed ** 2 * curvature
+    velocity = sampled_speed[:, None] * tangent
+    acceleration = (
+        longitudinal_acceleration[:, None] * tangent
+        + lateral_acceleration[:, None] * normal
+    )
+    scalar = sampled_speed * longitudinal_acceleration
+    bivector = sampled_speed * lateral_acceleration
+    lateral = np.abs(lateral_acceleration)
+    total = np.hypot(scalar, bivector)
+    return GeometricMotion(
+        sample_times,
+        distance - distance[0],
+        velocity,
+        acceleration,
+        scalar,
+        bivector,
+        lateral,
+        total,
     )
 
 
@@ -198,19 +261,22 @@ def _window_candidates(
 ) -> list[HighlightClip]:
     motion = timeline.motion
     scores = motion.score(mode)
+    score_at_time = PchipInterpolator(motion.times, scores)
+    time_integral = score_at_time.antiderivative()
     half = clip_duration / 2
     candidates = []
-    for index, peak in enumerate(motion.times):
+    for peak in motion.times:
         start = max(float(motion.times[0]), float(peak - half))
         end = min(float(motion.times[-1]), start + clip_duration)
         start = max(float(motion.times[0]), end - clip_duration)
-        inside = (motion.times >= start) & (motion.times <= end)
-        if end <= start or not inside.any():
+        first_index = int(np.searchsorted(motion.times, start, side="left"))
+        end_index = int(np.searchsorted(motion.times, end, side="right"))
+        if end <= start or end_index <= first_index:
             continue
-        # Mean intensity makes fixed-duration windows comparable while retaining
-        # enough context around a sharp event to produce a watchable clip.
-        window_score = float(np.mean(scores[inside]))
-        peak_index = int(np.flatnonzero(inside)[np.argmax(scores[inside])])
+        window_score = float(
+            (time_integral(end) - time_integral(start)) / (end - start)
+        )
+        peak_index = first_index + int(np.argmax(scores[first_index:end_index]))
         candidates.append(HighlightClip(
             timeline.source,
             start,

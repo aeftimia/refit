@@ -235,6 +235,13 @@ also records both geometric components, making the selections directly
 comparable. Velocity smoothing defaults to one second; at the current 1 Hz
 analysis rate this preserves the original samples.
 
+Track geometry is interpolated as a cubic planar path over cumulative GPS
+distance. Its analytic first and second derivatives provide tangent and signed
+curvature. Garmin speed is interpolated in time with a shape-preserving cubic;
+its analytic derivative provides longitudinal acceleration. Interest is sampled
+at 10 Hz, then each fixed-duration candidate receives the analytic time-average
+of its shape-preserving interest interpolant.
+
 Render a manifest at its original resolution and frame rate:
 
 ```bash

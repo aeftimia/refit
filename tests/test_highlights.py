@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
+from refit.speed_estimation import EARTH_RADIUS_METRES
 from refit.highlights import (
     MotionTimeline,
     compare_highlight_modes,
@@ -52,6 +53,28 @@ class GeometricMotionTests(unittest.TestCase):
             times, latitude, longitude, speed=speed, smoothing_seconds=0,
         )
         np.testing.assert_allclose(np.linalg.norm(motion.velocity, axis=1), 7.0)
+
+    def test_distance_spline_recovers_constant_radius_turn(self):
+        radius = 20.0
+        speed = 5.0
+        angle = np.linspace(0, np.pi / 2, 17)
+        east = radius * np.sin(angle)
+        north = radius * (1 - np.cos(angle))
+        latitude = np.degrees(north / EARTH_RADIUS_METRES)
+        longitude = np.degrees(east / EARTH_RADIUS_METRES)
+        times = radius * angle / speed
+        sample_times = np.linspace(times[1], times[-2], 100)
+        motion = geometric_motion_from_gps(
+            times,
+            latitude,
+            longitude,
+            speed=np.full_like(times, speed),
+            sample_times=sample_times,
+            smoothing_seconds=0,
+        )
+        np.testing.assert_allclose(
+            np.median(motion.lateral), speed ** 2 / radius, rtol=0.08,
+        )
 
 
 class HighlightComparisonTests(unittest.TestCase):

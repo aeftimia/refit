@@ -138,25 +138,19 @@ def timeline_from_aligned_fit(
     record_times = np.array([record.timestamp / 1000 for record in records], dtype=float)
     lower = max(start.timestamp(), record_times[0])
     upper = min(end.timestamp(), record_times[-1])
-    sample_times = np.arange(math.ceil(lower), math.floor(upper) + 1, dtype=float)
-    if len(sample_times) < 3:
-        raise ValueError(f"video/FIT overlap is too short: {video}")
-    latitude = np.interp(
-        sample_times, record_times,
-        [record.position_lat for record in records],
-    )
+    latitude = np.array([record.position_lat for record in records], dtype=float)
     record_longitude = np.unwrap(np.radians([
         record.position_long for record in records
     ]))
-    longitude = np.degrees(np.interp(
-        sample_times, record_times, record_longitude,
-    ))
+    longitude = np.degrees(record_longitude)
 
     dense = fit.gps_metadata_points()
     if len(dense) >= 2:
         speed_times = np.array([timestamp for _, timestamp, _ in dense])
         speed_values = np.array([speed for _, _, speed in dense])
-        speed = np.interp(sample_times, speed_times, speed_values)
+        lower = max(lower, speed_times[0])
+        upper = min(upper, speed_times[-1])
+        speed = speed_values
     else:
         record_speed = np.array([
             record.enhanced_speed
@@ -164,17 +158,27 @@ def timeline_from_aligned_fit(
             for record in records
         ])
         valid = np.isfinite(record_speed)
-        speed = (
-            np.interp(sample_times, record_times[valid], record_speed[valid])
-            if valid.sum() >= 2 else None
-        )
+        speed_times = record_times[valid] if valid.sum() >= 2 else None
+        speed = record_speed[valid] if valid.sum() >= 2 else None
+        if speed_times is not None:
+            lower = max(lower, speed_times[0])
+            upper = min(upper, speed_times[-1])
 
-    relative_times = sample_times - start.timestamp()
+    sample_times = np.arange(
+        math.ceil(lower * 10) / 10,
+        math.floor(upper * 10) / 10 + 0.05,
+        0.1,
+    )
+    if len(sample_times) < 3:
+        raise ValueError(f"video/FIT overlap is too short: {video}")
+    epoch = start.timestamp()
     motion = geometric_motion_from_gps(
-        relative_times,
+        record_times - epoch,
         latitude,
         longitude,
         speed=speed,
+        speed_times=None if speed_times is None else speed_times - epoch,
+        sample_times=sample_times - epoch,
         smoothing_seconds=smoothing_seconds,
     )
     return MotionTimeline(str(video), motion)
