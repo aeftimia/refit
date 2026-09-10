@@ -30,7 +30,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timezone", default="America/New_York")
     parser.add_argument("--duration", type=duration_seconds, required=True)
     parser.add_argument("--clip-duration", type=duration_seconds, default=10.0)
-    parser.add_argument("--smoothing", type=duration_seconds, default=1.0)
     parser.add_argument(
         "--order", choices=("chronological", "interesting"), default="interesting",
     )
@@ -46,7 +45,6 @@ def run(args: argparse.Namespace) -> dict:
     timelines = build_timelines(
         videos,
         args.fit_dir.expanduser().resolve(),
-        smoothing_seconds=args.smoothing,
         recorded_since=cutoff,
         timezone=args.timezone,
     )

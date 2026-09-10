@@ -232,8 +232,8 @@ refit-highlights /Volumes/Untitled/DCIM/Camera01 \
 This writes `highlights_lateral.json`, `highlights_bivector.json`, and
 `highlights_total.json`. Each clip
 also records both geometric components, making the selections directly
-comparable. Velocity smoothing defaults to one second; at the current 1 Hz
-analysis rate this preserves the original samples.
+comparable. The recorded speed samples are interpolated directly without a
+separate smoothing pass.
 
 Track geometry is interpolated as a cubic planar path over cumulative GPS
 distance. Its analytic first and second derivatives provide tangent and signed

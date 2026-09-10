@@ -88,7 +88,6 @@ def build_timelines(
     videos: list[Path],
     fit_dir: Path,
     *,
-    smoothing_seconds: float,
     recorded_since: datetime | None = None,
     timezone: str = "America/New_York",
 ) -> list[MotionTimeline]:
@@ -116,7 +115,6 @@ def build_timelines(
     return [
         timeline_from_aligned_fit(
             video, fit_path, metadata,
-            smoothing_seconds=smoothing_seconds,
         )
         for _, video, fit_path, metadata in pairs
     ]
@@ -126,8 +124,6 @@ def timeline_from_aligned_fit(
     video: Path,
     fit_path: Path,
     metadata: dict,
-    *,
-    smoothing_seconds: float,
 ) -> MotionTimeline:
     """Build video-relative geometric motion from an already aligned sidecar."""
     start, end = video_window(metadata)
@@ -179,7 +175,6 @@ def timeline_from_aligned_fit(
         speed=speed,
         speed_times=None if speed_times is None else speed_times - epoch,
         sample_times=sample_times - epoch,
-        smoothing_seconds=smoothing_seconds,
     )
     return MotionTimeline(str(video), motion)
 
@@ -196,10 +191,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--duration", type=duration_seconds, required=True)
     parser.add_argument("--clip-duration", type=duration_seconds, default=10.0)
     parser.add_argument(
-        "--smoothing", type=duration_seconds, default=1.0,
-        help="velocity smoothing window (default: 1s)",
-    )
-    parser.add_argument(
         "--order", choices=("chronological", "interesting"),
         default="chronological",
     )
@@ -212,9 +203,7 @@ def run(args: argparse.Namespace) -> dict:
     if not videos:
         raise ValueError("no eligible MP4 videos found")
     fit_dir = args.fit_dir.expanduser().resolve()
-    timelines = build_timelines(
-        videos, fit_dir, smoothing_seconds=args.smoothing, timezone=args.timezone,
-    )
+    timelines = build_timelines(videos, fit_dir, timezone=args.timezone)
     return write_comparison_manifests(
         args.output_prefix.expanduser().resolve(),
         timelines,

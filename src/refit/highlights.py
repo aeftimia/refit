@@ -93,32 +93,7 @@ def _validate_motion(times, velocity) -> tuple[np.ndarray, np.ndarray]:
     return times, velocity
 
 
-def smooth_vectors(values, window_samples: int) -> np.ndarray:
-    """Apply a centered moving average without shortening the series."""
-    values = np.asarray(values, dtype=float)
-    window_samples = int(window_samples)
-    if window_samples <= 1:
-        return values.copy()
-    if window_samples % 2 == 0:
-        window_samples += 1
-    window_samples = min(window_samples, len(values) - (1 - len(values) % 2))
-    if window_samples <= 1:
-        return values.copy()
-    radius = window_samples // 2
-    padded = np.pad(values, ((radius, radius), (0, 0)), mode="edge")
-    kernel = np.ones(window_samples, dtype=float) / window_samples
-    return np.column_stack([
-        np.convolve(padded[:, axis], kernel, mode="valid")
-        for axis in range(values.shape[1])
-    ])
-
-
-def geometric_motion(
-    times,
-    velocity,
-    *,
-    smoothing_seconds: float = 1.0,
-) -> GeometricMotion:
+def geometric_motion(times, velocity) -> GeometricMotion:
     """Compute the geometric product ``velocity * acceleration`` once.
 
     In the horizontal plane its scalar part is specific kinetic power and its
@@ -126,9 +101,6 @@ def geometric_motion(
     multivector norm is ``|velocity| * |acceleration|``.
     """
     times, velocity = _validate_motion(times, velocity)
-    median_step = float(np.median(np.diff(times)))
-    window_samples = max(1, round(float(smoothing_seconds) / median_step))
-    velocity = smooth_vectors(velocity, window_samples)
     acceleration = np.gradient(velocity, times, axis=0)
     scalar = np.einsum("ij,ij->i", velocity, acceleration)
     bivector = velocity[:, 0] * acceleration[:, 1] - velocity[:, 1] * acceleration[:, 0]
@@ -152,7 +124,6 @@ def geometric_motion_from_gps(
     speed=None,
     speed_times=None,
     sample_times=None,
-    smoothing_seconds: float = 1.0,
 ) -> GeometricMotion:
     """Derive motion analytically from a distance-parameterized GPS path."""
     times = np.asarray(times, dtype=float)
@@ -196,9 +167,6 @@ def geometric_motion_from_gps(
             raise ValueError("speed must contain at least two finite samples")
         speed_times = speed_times[valid]
         speed_values = np.maximum(speed_values[valid], 0)
-    median_step = float(np.median(np.diff(speed_times)))
-    window_samples = max(1, round(float(smoothing_seconds) / median_step))
-    speed_values = smooth_vectors(speed_values[:, None], window_samples)[:, 0]
     speed_at_time = PchipInterpolator(speed_times, speed_values)
 
     if sample_times is None:

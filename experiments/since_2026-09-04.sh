@@ -9,8 +9,7 @@ project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
   --since 2026-09-04 \
   --timezone America/New_York \
   --duration 10m \
-  --clip-duration 10s \
-  --smoothing 1s \
+  --clip-duration 20s \
   --order interesting \
   --encoder copy \
   --output-dir "$project_dir/highlight_exports"

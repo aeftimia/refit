@@ -19,7 +19,7 @@ class GeometricMotionTests(unittest.TestCase):
     def test_straight_acceleration_is_scalar_only(self):
         times = np.arange(5.0)
         velocity = np.column_stack((times, np.zeros_like(times)))
-        motion = geometric_motion(times, velocity, smoothing_seconds=0)
+        motion = geometric_motion(times, velocity)
         np.testing.assert_allclose(motion.scalar, times)
         np.testing.assert_allclose(motion.bivector, 0)
         np.testing.assert_allclose(motion.total, times)
@@ -27,7 +27,7 @@ class GeometricMotionTests(unittest.TestCase):
     def test_constant_speed_turn_is_bivector_only(self):
         times = np.linspace(0, 1, 101)
         velocity = np.column_stack((np.cos(times), np.sin(times)))
-        motion = geometric_motion(times, velocity, smoothing_seconds=0)
+        motion = geometric_motion(times, velocity)
         np.testing.assert_allclose(motion.scalar[1:-1], 0, atol=5e-5)
         np.testing.assert_allclose(motion.bivector[1:-1], 1, atol=5e-5)
         np.testing.assert_allclose(motion.lateral[1:-1], 1, atol=5e-5)
@@ -37,7 +37,7 @@ class GeometricMotionTests(unittest.TestCase):
         times = np.linspace(0, 1, 101)
         speed = np.exp(times)
         velocity = speed[:, None] * np.column_stack((np.cos(times), np.sin(times)))
-        motion = geometric_motion(times, velocity, smoothing_seconds=0)
+        motion = geometric_motion(times, velocity)
         np.testing.assert_allclose(
             motion.total[1:-1],
             np.hypot(motion.scalar[1:-1], motion.bivector[1:-1]),
@@ -50,7 +50,7 @@ class GeometricMotionTests(unittest.TestCase):
         longitude = np.linspace(0, 0.001, 5)
         speed = np.full(5, 7.0)
         motion = geometric_motion_from_gps(
-            times, latitude, longitude, speed=speed, smoothing_seconds=0,
+            times, latitude, longitude, speed=speed,
         )
         np.testing.assert_allclose(np.linalg.norm(motion.velocity, axis=1), 7.0)
 
@@ -70,7 +70,6 @@ class GeometricMotionTests(unittest.TestCase):
             longitude,
             speed=np.full_like(times, speed),
             sample_times=sample_times,
-            smoothing_seconds=0,
         )
         np.testing.assert_allclose(
             np.median(motion.lateral), speed ** 2 / radius, rtol=0.08,
@@ -87,7 +86,7 @@ class HighlightComparisonTests(unittest.TestCase):
         velocity[10:, 1] = 6 * np.sin(angle)
         timeline = MotionTimeline(
             "ride.mp4",
-            geometric_motion(times, velocity, smoothing_seconds=0),
+            geometric_motion(times, velocity),
         )
         result = compare_highlight_modes(
             [timeline], target_duration=5, clip_duration=5, order="interesting"
@@ -104,7 +103,7 @@ class HighlightComparisonTests(unittest.TestCase):
         times = np.arange(20.0)
         velocity = np.column_stack((times, np.sin(times)))
         timeline = MotionTimeline(
-            "ride.mp4", geometric_motion(times, velocity, smoothing_seconds=0)
+            "ride.mp4", geometric_motion(times, velocity)
         )
         with tempfile.TemporaryDirectory() as directory:
             outputs = write_comparison_manifests(
@@ -126,7 +125,7 @@ class HighlightComparisonTests(unittest.TestCase):
         result = compare_highlight_modes(
             [MotionTimeline(
                 "ride.mp4",
-                geometric_motion(times, velocity, smoothing_seconds=0),
+                geometric_motion(times, velocity),
             )],
             target_duration=12,
             clip_duration=5,
@@ -140,7 +139,7 @@ class HighlightComparisonTests(unittest.TestCase):
         result = compare_highlight_modes(
             [MotionTimeline(
                 "ride.mp4",
-                geometric_motion(times, velocity, smoothing_seconds=0),
+                geometric_motion(times, velocity),
             )],
             target_duration=50,
             clip_duration=10,
