@@ -296,3 +296,34 @@ For faster test exports, choose an encoder and output height instead:
 refit-render-highlights highlights_total.json preview.mp4 \
   --encoder libx264 --height 720
 ```
+
+### Experimental camera-IMU bivector
+
+Insta360 camera originals and matching `LRV_*.lrv` proxies contain roughly
+1 kHz acceleration and angular-velocity telemetry that Studio removes from its
+exported MP4 files. `experiments/imu_bivector_highlights.py` adds a vertical
+impact component to the GPS/Garmin bivector:
+
+```text
+sqrt(|v ∧ a_horizontal|² + |v|² a_vertical²)
+```
+
+The script reduces camera acceleration to 100 Hz, estimates the slowly varying
+gravity vector in camera coordinates, and forms a 0.2-second RMS envelope from
+the gravity-parallel residual. This makes the result independent of a fixed
+camera orientation, but it remains experimental: head motion, vibration, and
+the gravity filter can affect the inferred vertical component.
+
+Run it with the exported overlay videos as sources and the mounted camera card
+as the IMU source:
+
+```bash
+python experiments/imu_bivector_highlights.py VIDEO.mp4 [...] \
+  --fit-dir ~/Downloads \
+  --camera-dir /Volumes/Untitled/DCIM/Camera01 \
+  --duration 2m \
+  --clip-duration 20s \
+  --max-clips-per-source 2 \
+  --encoder copy \
+  --output ~/Downloads/bivector-3d.mp4
+```

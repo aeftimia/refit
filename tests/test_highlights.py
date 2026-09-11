@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,18 @@ class GeometricMotionTests(unittest.TestCase):
         velocity = np.column_stack((np.cos(times), np.sin(times)))
         motion = geometric_motion(times, velocity)
         np.testing.assert_allclose(motion.score(), np.abs(motion.bivector))
+
+    def test_3d_bivector_adds_vertical_acceleration_orthogonally(self):
+        times = np.arange(5.0)
+        velocity = np.column_stack((np.full(5, 3.0), np.zeros(5)))
+        motion = replace(
+            geometric_motion(times, velocity),
+            vertical_acceleration=np.full(5, 2.0),
+        )
+        np.testing.assert_allclose(
+            motion.score("bivector_3d"),
+            np.hypot(motion.bivector, 6.0),
+        )
 
     def test_straight_acceleration_is_scalar_only(self):
         times = np.arange(5.0)

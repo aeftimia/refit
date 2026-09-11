@@ -13,7 +13,7 @@ from scipy.interpolate import CubicSpline, PchipInterpolator
 
 from .speed_estimation import EARTH_RADIUS_METRES
 
-ScoreMode = Literal["lateral", "bivector", "total"]
+ScoreMode = Literal["lateral", "bivector", "bivector_3d", "total"]
 DEFAULT_SCORE_MODE: ScoreMode = "bivector"
 
 
@@ -29,12 +29,18 @@ class GeometricMotion:
     bivector: np.ndarray
     lateral: np.ndarray
     total: np.ndarray
+    vertical_acceleration: np.ndarray | None = None
 
     def score(self, mode: ScoreMode = DEFAULT_SCORE_MODE) -> np.ndarray:
         if mode == "lateral":
             return self.lateral
         if mode == "bivector":
             return np.abs(self.bivector)
+        if mode == "bivector_3d":
+            if self.vertical_acceleration is None:
+                raise ValueError("3D bivector scoring requires camera IMU data")
+            speed = np.linalg.norm(self.velocity, axis=1)
+            return np.hypot(self.bivector, speed * self.vertical_acceleration)
         if mode == "total":
             return self.total
         raise ValueError(f"unknown highlight score mode: {mode}")
@@ -59,13 +65,15 @@ class HighlightClip:
     bivector_at_peak: float
     lateral_at_peak: float
     total_at_peak: float
+    vertical_acceleration_at_peak: float | None = None
+    bivector_3d_at_peak: float | None = None
 
     @property
     def duration(self) -> float:
         return self.end - self.start
 
     def as_dict(self) -> dict:
-        return {
+        result = {
             "source": self.source,
             "start_seconds": self.start,
             "end_seconds": self.end,
@@ -77,6 +85,10 @@ class HighlightClip:
             "lateral_at_peak": self.lateral_at_peak,
             "total_at_peak": self.total_at_peak,
         }
+        if self.vertical_acceleration_at_peak is not None:
+            result["vertical_acceleration_at_peak"] = self.vertical_acceleration_at_peak
+            result["bivector_3d_at_peak"] = self.bivector_3d_at_peak
+        return result
 
 
 def _validate_motion(times, velocity) -> tuple[np.ndarray, np.ndarray]:
@@ -245,6 +257,10 @@ def _window_candidates(
             (time_integral(end) - time_integral(start)) / (end - start)
         )
         peak_index = first_index + int(np.argmax(scores[first_index:end_index]))
+        vertical_at_peak = (
+            None if motion.vertical_acceleration is None
+            else float(motion.vertical_acceleration[peak_index])
+        )
         candidates.append(HighlightClip(
             timeline.source,
             start,
@@ -255,6 +271,8 @@ def _window_candidates(
             float(motion.bivector[peak_index]),
             float(motion.lateral[peak_index]),
             float(motion.total[peak_index]),
+            vertical_at_peak,
+            None if vertical_at_peak is None else float(scores[peak_index]),
         ))
     return candidates
 
