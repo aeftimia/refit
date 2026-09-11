@@ -17,6 +17,12 @@ from refit.highlight_cli import aligned_fit_path, discover_videos
 
 
 class GeometricMotionTests(unittest.TestCase):
+    def test_default_score_is_absolute_bivector(self):
+        times = np.arange(5.0)
+        velocity = np.column_stack((np.cos(times), np.sin(times)))
+        motion = geometric_motion(times, velocity)
+        np.testing.assert_allclose(motion.score(), np.abs(motion.bivector))
+
     def test_straight_acceleration_is_scalar_only(self):
         times = np.arange(5.0)
         velocity = np.column_stack((times, np.zeros_like(times)))
@@ -43,7 +49,7 @@ class GeometricMotionTests(unittest.TestCase):
             motion.total[1:-1],
             np.hypot(motion.scalar[1:-1], motion.bivector[1:-1]),
         )
-        np.testing.assert_array_equal(motion.score(), motion.total)
+        np.testing.assert_array_equal(motion.score("total"), motion.total)
 
     def test_gps_track_uses_recorded_speed_magnitude(self):
         times = np.arange(5.0)

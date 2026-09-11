@@ -14,7 +14,7 @@ from scipy.interpolate import CubicSpline, PchipInterpolator
 from .speed_estimation import EARTH_RADIUS_METRES
 
 ScoreMode = Literal["lateral", "bivector", "total"]
-DEFAULT_SCORE_MODE: ScoreMode = "total"
+DEFAULT_SCORE_MODE: ScoreMode = "bivector"
 
 
 @dataclass(frozen=True)

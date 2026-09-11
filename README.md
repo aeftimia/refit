@@ -217,8 +217,8 @@ monocular optical flow into independently calibrated ground-truth speed.
 FIT sidecars. All outputs share the same motion analysis, candidate windows,
 overlap removal, and duration budget:
 
-- `total` (the default score): `|velocity acceleration| = |velocity||acceleration|`
-- `bivector`: `|velocity ∧ acceleration|`
+- `bivector` (the default score): `|velocity ∧ acceleration|`
+- `total`: `|velocity acceleration| = |velocity||acceleration|`
 - `lateral`: `|(velocity / |velocity|) ∧ acceleration|`, or lateral acceleration
 
 An exported video's FIT file may be named `<video-stem>_speed.fit`. When names
